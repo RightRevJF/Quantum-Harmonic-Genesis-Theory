@@ -7,6 +7,7 @@
 // production notes; the documents say so.
 
 import { parseChord, chordName } from "./harmony.js";
+import * as Prod from "./production.js";
 
 // ---------- spelling ----------
 const LETTERS = ["C", "D", "E", "F", "G", "A", "B"];
@@ -85,83 +86,39 @@ export function buildRecord(cand, brief, song) {
     });
     bar += bars;
   });
+  const plan = song.production && song.production.plan ? song.production.plan : Prod.defaultPlan(song.type, brief.voiceName);
+  if (plan.tag) {
+    // a 4-bar tag on the chorus's chords, home on the tonic
+    const ch = (cand.sections.find((s) => s.kind === "chorus") || cand.sections[cand.sections.length - 1]).loop;
+    const tonic = brief.key.mode === "minor" ? "i" : "I";
+    sections.push({ name: "Tag", kind: "tag", startBar: bar, bars: 4, chords: [ch[0 % ch.length], ch[1 % ch.length], ch[2 % ch.length], tonic], notes: [], lines: [] });
+    bar += 4;
+  }
   const totalBars = bar - 1;
   const c = song.contract || {};
   return {
     title: c.title || "Untitled", writer: c.writer || "", key: brief.key, ks, bpm: brief.bpm, beatsPerBar: brief.beatsPerBar, barLen,
     feel: c.feel || "", voiceName: brief.voiceName, voice: brief.voice, male: /male|bass|anthem/.test(brief.voiceName) && !/female/.test(brief.voiceName),
     sections, totalBars, about: song.q0 || "", form: sections.filter((s) => s.kind !== "intro").map((s) => s.name),
-    melody: sections.flatMap((s) => s.notes),
+    melody: sections.flatMap((s) => s.notes), production: plan,
   };
 }
 
-// ---------- the default arrangement (until checkpoint e) ----------
-const ROLE = { intro: "intro", verse: "verse", prechorus: "build", chorus: "full", bridge: "thin", outro: "intro", tag: "full", vamp: "full" };
-
+// ---------- the arrangement: checkpoint (e)'s plan, or the type's default palette ----------
+const cache = new WeakMap();
 export function arrangement(rec) {
-  const { barLen, ks } = rec;
-  const tonic = ks.tonic;
-  const keysRH = [], keysLH = [], guitar = [], bass = [], drums = [];
-  let prevVoicing = null;
-  rec.sections.forEach((sec) => {
-    const role = ROLE[sec.kind] || "verse";
-    sec.chords.forEach((sym, b) => {
-      const t0 = (sec.startBar - 1 + b) * barLen;
-      const ch = parseChord(sym, ks.mode) || parseChord(ks.mode === "minor" ? "i" : "I", ks.mode);
-      const pcs = ch.tones.slice(0, 3).map((x) => (tonic + x) % 12);
-      // right hand: the triad voicing nearest the last, between G3 and E5
-      const voicings = [];
-      for (let base = 55; base <= 67; base++) {
-        if (!pcs.includes(base % 12)) continue;
-        const v = [base];
-        for (let k = 1; k < 3; k++) { let p = v[k - 1] + 1; while (!pcs.includes(p % 12) || v.includes(p) || v.some((q) => q % 12 === p % 12)) p++; v.push(p); }
-        if (v[2] <= 76) voicings.push(v);
-      }
-      const center = prevVoicing ? prevVoicing.reduce((a, x) => a + x, 0) / 3 : 64;
-      const v = voicings.reduce((a, x) => (Math.abs(x.reduce((s, y) => s + y, 0) / 3 - center) < Math.abs(a.reduce((s, y) => s + y, 0) / 3 - center) ? x : a), voicings[0]);
-      prevVoicing = v;
-      const root = (tonic + ch.root) % 12;
-      const rhPattern = role === "full" ? [[0, barLen / 2], [barLen / 2, barLen / 2]] : [[0, barLen]];
-      rhPattern.forEach(([o, d]) => keysRH.push({ t: t0 + o, dur: d, ps: v }));
-      keysLH.push({ t: t0, dur: barLen, ps: [36 + ((root - 0 + 12) % 12) + (root < 7 ? 12 : 0)] });
-      // guitar: strummed slashes under the chord names
-      const strum = role === "full" ? 1 : role === "thin" ? barLen / 2 : 2;
-      for (let o = 0; o < barLen; o += strum) guitar.push({ t: t0 + o, dur: strum, slash: true, chord: o === 0 ? sym : null });
-      // bass (written an octave above sounding): root and fifth in the verse, roots on the beat in the chorus
-      const bRoot = 40 + ((root - 4 + 12) % 12);
-      const fifth = bRoot + 7 <= 55 ? bRoot + 7 : bRoot - 5;
-      if (role === "full" || role === "build") for (let o = 0; o < barLen; o += 2) bass.push({ t: t0 + o, dur: 2, ps: [bRoot] });
-      else if (role === "intro" || role === "thin") bass.push({ t: t0, dur: barLen, ps: [bRoot] });
-      else { bass.push({ t: t0, dur: barLen / 2, ps: [bRoot] }); bass.push({ t: t0 + barLen / 2, dur: barLen / 2, ps: [fifth] }); }
-      // drums: K kick, S snare, H hi-hat, C crash
-      const kit = [];
-      const four = rec.beatsPerBar === 4;
-      for (let o = 0; o < barLen; o++) {
-        const hits = [];
-        const beat = o % 2 === 0 ? o / 2 + 1 : null;
-        if (role === "thin") { if (o === 0) hits.push("K"); if (o === barLen / 2) hits.push("S"); if (beat) hits.push("H"); }
-        else if (role === "intro") { if (o === 0) hits.push("K"); if (beat) hits.push("H"); }
-        else {
-          if (o === 0 || (four && o === 4) || (role === "full" && four && o === 5)) hits.push("K");
-          if (four ? (o === 2 || o === 6) : (o === 2 || o === 4)) hits.push("S");
-          hits.push("H");
-          if (o === 0 && b === 0 && (role === "full")) hits.push("C");
-        }
-        kit.push(hits);
-      }
-      const hitAt = kit.map((h, o) => (h.length ? o : -1)).filter((o) => o >= 0);
-      hitAt.forEach((o, k) => drums.push({ t: t0 + o, dur: (hitAt[k + 1] ?? barLen) - o, hits: kit[o] }));
-    });
-  });
-  return { keysRH, keysLH, guitar, bass, drums };
+  if (!cache.has(rec)) cache.set(rec, Prod.arrange(rec, rec.production));
+  return cache.get(rec);
 }
-
-export const PLAYER_NOTES = {
-  keys: { intro: "Whole-note chords, soft.", verse: "Whole-note chords under the voice; stay below the melody.", build: "Whole notes, lifting in level.", full: "Half-note chords, fuller and louder.", thin: "Whole notes, sparse: leave room for the words." },
-  guitar: { intro: "Quarter-note strums, light.", verse: "Quarter-note strums.", build: "Quarter notes, digging in.", full: "Eighth-note strums, open and driving.", thin: "Half-note strums, let them ring." },
-  bass: { intro: "Roots, whole notes.", verse: "Root and fifth, half notes.", build: "Roots on every beat.", full: "Roots on every beat, locked with the kick.", thin: "Roots, whole notes." },
-  drums: { intro: "Hi-hat time with the kick on 1.", verse: "Kick on 1 and 3, snare on 2 and 4, closed hi-hat eighths.", build: "Same groove, building.", full: "Kick on 1, 3 and the and of 3; snare on 2 and 4; crash into the chorus.", thin: "Half-time: kick on 1, snare on 3, hi-hat quarters." },
-};
+// Every staff of the song: the voice, then the palette's players.
+export function instruments(rec) {
+  return [{ id: "voice", name: "Voice", kind: "voice" }, ...arrangement(rec).layers.map((l) => ({ id: l.id, name: l.name, kind: l.kind, notes: l.notes }))];
+}
+export function noteFor(rec, id, sectionIndex) {
+  const arr = arrangement(rec);
+  const ly = arr.layers.find((l) => l.id === id);
+  return ly ? ly.notes[arr.roles[sectionIndex]] : "";
+}
 
 // ---------- ABC ----------
 const DUR_OK = { 1: "", 2: "2", 3: "3", 4: "4", 6: "6", 8: "8", 12: "12" };
@@ -297,30 +254,29 @@ function annotations(rec) {
 }
 function chordList(rec) { return rec.sections.flatMap((s) => s.chords); }
 
-export const INSTRUMENTS = [
-  { id: "voice", name: "Voice" },
-  { id: "guitar", name: "Guitar" },
-  { id: "keys", name: "Keys" },
-  { id: "bass", name: "Bass" },
-  { id: "drums", name: "Drums" },
-];
-
+const LETTERS_V = "ABCEFHIJKMNOPQSTUWXYZ";
 function voiceData(rec, arr, id, inScore = false, top = false) {
-  const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, ps: [n.p], syl: n.syl, word: n.word, part: n.part, of: n.of, lineStart: n.lineStart }));
   const ann0 = annotations(rec), chords0 = chordList(rec);
   const ann = !inScore || top ? ann0 : null;
-  const chords = !inScore || id === "voice" || id === "guitar" ? chords0 : null;
   const perc = { K: "F", S: "c", H: "!style=x!g", C: "!style=x!a" };
-  switch (id) {
-    case "voice": return [{ v: "V", name: "Voice", clef: rec.male ? "treble-8" : "treble", data: voiceBars(melodyEvents, rec, { lyrics: true, chords, annotations: ann }) }];
-    case "guitar": return [{ v: "G", name: "Guitar", clef: "treble", style: "rhythm", data: voiceBars(arr.guitar, rec, { chords, annotations: ann }) }];
-    case "keys": return [
-      { v: "R", name: "Keys", clef: "treble", data: voiceBars(arr.keysRH, rec, { chords, annotations: ann }) },
-      { v: "L", name: "", clef: "bass", data: voiceBars(arr.keysLH, rec, {}) },
-    ];
-    case "bass": return [{ v: "B", name: "Bass", clef: "bass", data: voiceBars(arr.bass, rec, { chords, annotations: ann }) }];
-    case "drums": return [{ v: "D", name: "Drums", clef: "perc", data: voiceBars(arr.drums.map((d) => ({ t: d.t, dur: d.dur, perc: d.hits.length > 1 ? `[${d.hits.map((h) => perc[h].replace("!style=x!", "")).join("")}]` : perc[d.hits[0]] })), rec, { annotations: ann }) }];
-    default: return [];
+  if (id === "voice") {
+    const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, ps: [n.p], syl: n.syl, word: n.word, part: n.part, of: n.of, lineStart: n.lineStart }));
+    return [{ v: "V", name: "Voice", clef: rec.male ? "treble-8" : "treble", data: voiceBars(melodyEvents, rec, { lyrics: true, chords: chords0, annotations: ann }) }];
+  }
+  const li = arr.layers.findIndex((l) => l.id === id);
+  if (li < 0) return [];
+  const ly = arr.layers[li];
+  const v = LETTERS_V[li % LETTERS_V.length];
+  const chords = !inScore || ly.kind === "strum" ? chords0 : null;
+  const clefFor = (evs) => { const ps = evs.flatMap((e) => e.ps || []); if (!ps.length) return "treble"; const med = ps.sort((a, b) => a - b)[Math.floor(ps.length / 2)]; return med < 57 ? "bass" : "treble"; };
+  switch (ly.kind) {
+    case "strum": return [{ v, name: ly.name, clef: "treble", style: "rhythm", data: voiceBars(ly.events.map((e) => ({ t: e.t, dur: e.dur, slash: true })), rec, { chords, annotations: ann }) }];
+    case "piano": {
+      const R = ly.events.filter((e) => e.hand === "R"), Lh = ly.events.filter((e) => e.hand === "L");
+      return [{ v: "R", name: ly.name, clef: "treble", data: voiceBars(R, rec, { chords, annotations: ann }) }, { v: "L", name: "", clef: "bass", data: voiceBars(Lh, rec, {}) }];
+    }
+    case "drums": return [{ v: "D", name: ly.name, clef: "perc", data: voiceBars(ly.events.map((d) => ({ t: d.t, dur: d.dur, perc: d.hits.length > 1 ? `[${d.hits.map((h) => perc[h].replace("!style=x!", "")).join("")}]` : perc[d.hits[0]] })), rec, { annotations: ann }) }];
+    default: return [{ v, name: ly.name, clef: ly.kind === "bass" ? "bass" : clefFor(ly.events), data: voiceBars(ly.events.map((e) => ({ t: e.t, dur: e.dur, ps: e.ps })), rec, { chords, annotations: ann }) }];
   }
 }
 
@@ -393,7 +349,7 @@ export function chart(rec) {
     name: s.name, startBar: s.startBar, bars: s.bars,
     cells: s.chords.map((c) => nashville(c, rec.key.mode)),
     names: s.chords.map((c) => chordName(c, rec.key)),
-    drums: PLAYER_NOTES.drums[ROLE[s.kind] || "verse"],
+    drums: noteFor(rec, "drums", rec.sections.indexOf(s)),
   }));
   return { title: rec.title, key: `${rec.ks.name} ${rec.key.mode}`, bpm: rec.bpm, meter: `${rec.beatsPerBar}/4`, feel: rec.feel, rows };
 }
@@ -418,7 +374,7 @@ export function songbook(rec, song) {
     }),
   }));
   const lyricSheet = rec.sections.filter((s) => s.kind !== "intro").map((s) => ({ name: s.name, lines: s.lines.map((l) => ({ bar: l.bar, pickup: l.bar !== l.startBar ? l.startBar : null, text: l.text })) }));
-  const players = INSTRUMENTS.filter((x) => x.id !== "voice").map((x) => ({ name: x.name, bySection: [...new Set(rec.sections.map((s) => ROLE[s.kind] || "verse"))].map((role) => ({ role, note: PLAYER_NOTES[x.id][role] })), sections: rec.sections.map((s) => ({ name: s.name, note: PLAYER_NOTES[x.id][ROLE[s.kind] || "verse"] })) }));
+  const players = instruments(rec).filter((x) => x.id !== "voice").map((x) => ({ name: x.name, sections: rec.sections.map((s, i) => ({ name: s.name, note: noteFor(rec, x.id, i) })) }));
   return {
     title: rec.title, writer: rec.writer,
     glance: {
@@ -427,6 +383,15 @@ export function songbook(rec, song) {
       range: mel.length ? `${noteLabel(lo, ks)} to ${noteLabel(hi, ks)}${rec.male ? " (written an octave higher on the treble clef with an 8)" : ""}` : "",
     },
     sections, lyricSheet, players,
+    producer: Prod.oneSheet(rec, song, arrangement(rec), { target: song.production && song.production.target, references: song.production && song.production.references }),
+    session: {
+      tempo: `${rec.bpm} BPM, click on quarters, ${rec.beatsPerBar}/4; a 4-bar intro${rec.sections.some((x) => x.kind === "tag") ? " and a 4-bar tag" : ""}.`,
+      key: `${ks.name} ${rec.key.mode}.`,
+      chords: rec.sections.map((x) => `${x.name} (bars ${x.startBar}–${x.startBar + x.bars - 1}): ${x.chords.map((c) => chordName(c, rec.key)).join(" | ")}`),
+      range: mel.length ? `${noteLabel(lo, ks)} to ${noteLabel(hi, ks)}.` : "",
+      tracking: `Track to the click: ${["bass and drums together", ...arrangement(rec).layers.filter((l) => l.kind !== "bass" && l.kind !== "drums").map((l) => l.name.toLowerCase())].join(", then ")}, then the lead vocal, then the ${(arrangement(rec).layers.find((l) => l.kind === "fill") || { name: "fills" }).name.toLowerCase()} answers.`,
+      panning: "Voice, bass and kick in the centre; guitars and keys spread left and right; strings wide; the lead instrument slightly off centre, opposite the main guitar.",
+    },
     singer: mel.length ? `The range runs ${noteLabel(lo, ks)} to ${noteLabel(hi, ks)}. The highest note is ${noteLabel(hi, ks)} on "${(mel.find((n) => n.p === hi) || {}).word || ""}" in bar ${Math.floor((mel.find((n) => n.p === hi) || { t: 0 }).t / rec.barLen) + 1}. Breathe at the rests between lines.` : "",
   };
 }

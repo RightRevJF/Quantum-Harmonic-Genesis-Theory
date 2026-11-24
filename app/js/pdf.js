@@ -84,31 +84,28 @@ export async function leadSheetPdf(rec, opts = {}) {
 export async function scoreAndPartsPdf(rec, opts = {}) {
   needLibs();
   const doc = newDoc();
-  const all = D.INSTRUMENTS.map((x) => x.id);
-  const score = D.scoreSystems(rec, all, { per: Math.min(4, D.barsPerSystem(rec) + 1) });
+  const ins = D.instruments(rec);
+  const score = D.scoreSystems(rec, ins.map((x) => x.id), { per: Math.min(4, D.barsPerSystem(rec) + 1) });
   let y = PAGE.margin;
   doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(90);
   doc.text("FULL SCORE", PAGE.margin, y); doc.setTextColor(0);
-  y = await placeSystems(doc, score, y + 8, { ...opts, label: "Full score", staffwidth: 1000 });
-  for (const ins of D.INSTRUMENTS) {
+  y = await placeSystems(doc, score, y + 8, { ...opts, label: "Full score", staffwidth: ins.length > 6 ? 1100 : 1000 });
+  for (const x of ins) {
     doc.addPage();
-    const systems = D.partSystems(rec, ins.id, { title: true, per: ins.id === "voice" ? D.barsPerSystem(rec) : 4 });
-    systems[0].abc = systems[0].abc.replace(/^(T:.*)$/m, `$1\nT:${ins.name}`);
+    const systems = D.partSystems(rec, x.id, { title: true, per: x.id === "voice" ? D.barsPerSystem(rec) : 4 });
+    systems[0].abc = systems[0].abc.replace(/^(T:.*)$/m, `$1\nT:${x.name}`);
     let py = PAGE.margin;
-    py = await placeSystems(doc, systems, py, { ...opts, label: `${ins.name} part` });
-    const notes = D.PLAYER_NOTES[ins.id];
-    if (notes) {
-      if (py > PAGE.h - 120) { doc.addPage(); py = PAGE.margin; }
-      doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text(`${ins.name}: by section`, PAGE.margin, py + 14);
+    py = await placeSystems(doc, systems, py, { ...opts, label: `${x.name} part` });
+    if (x.id !== "voice") {
+      if (py > PAGE.h - 130) { doc.addPage(); py = PAGE.margin; }
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text(ascii(`${x.name}: by section`), PAGE.margin, py + 14);
       doc.setFont("helvetica", "normal"); doc.setFontSize(9);
       let ly = py + 28;
-      rec.sections.filter((s, i) => rec.sections.findIndex((x) => x.kind === s.kind) === i).forEach((s) => {
-        const role = { intro: "intro", verse: "verse", prechorus: "build", chorus: "full", bridge: "thin" }[s.kind] || "verse";
-        doc.text(ascii(`${s.name.replace(/\s*\d+$/, "")}: ${notes[role]}`), PAGE.margin, ly); ly += 13;
-      });
+      const seen = new Set();
+      rec.sections.forEach((s, i) => { const k = s.name.replace(/\s*\d+$/, ""); if (seen.has(k)) return; seen.add(k); doc.text(ascii(`${k}: ${D.noteFor(rec, x.id, i)}`), PAGE.margin, ly); ly += 13; });
     }
-    if (ins.id === "bass") { doc.setFontSize(8); doc.text("Written an octave higher than it sounds.", PAGE.margin, PAGE.h - 34); }
-    if (ins.id === "drums") { doc.setFontSize(8); doc.text("Bottom space: kick. Third space: snare. Top (x): hi-hat. Above the staff (x): crash.", PAGE.margin, PAGE.h - 34); }
+    if (x.kind === "bass") { doc.setFontSize(8); doc.text("Written an octave higher than it sounds.", PAGE.margin, PAGE.h - 34); }
+    if (x.kind === "drums") { doc.setFontSize(8); doc.text("Bottom space: kick. Third space: snare. Top (x): hi-hat. Above the staff (x): crash.", PAGE.margin, PAGE.h - 34); }
   }
   footer(doc, rec, "full score and parts");
   return doc.output("arraybuffer");
@@ -165,7 +162,7 @@ export function songbookPdf(rec, song) {
   p(`Form: ${b.glance.form}.`);
   if (b.glance.about) p(`What it is about, in the writer's words: "${b.glance.about}"`);
   if (b.glance.range) p(`Vocal range: ${b.glance.range}.`);
-  p("How to play it: keep the verses down and let the chorus open up; the bridge thins out so the words carry. The band parts are a starting arrangement.");
+  p(`How to play it: ${D.arrangement(rec).palette.name.toLowerCase()} (${D.arrangement(rec).palette.context}). Keep the verses down and let the chorus open up; the bridge thins out so the words carry; the band stops for a beat before the final chorus; the final chorus is the top.`);
   h2("Section by section");
   b.sections.forEach((s) => {
     p(`${s.name}  (bars ${s.bars})`, 11, "bold");
@@ -185,8 +182,34 @@ export function songbookPdf(rec, song) {
     p(s.name, 11, "bold");
     s.lines.forEach((l) => p(`${l.pickup ? `${l.bar} (pickup in ${l.pickup})` : l.bar}    ${l.text}`, 10));
   });
+  // the producer one-sheet, on its own page
+  const ps = b.producer;
+  doc.addPage(); y = m;
+  h1("Producer one-sheet");
+  h2("Emotional target"); p(ps.target || "");
+  h2("Three references");
+  (ps.references.length ? ps.references : ["(to choose: check each by listening)"]).forEach((r) => p(`- ${r}`));
+  h2("Dynamic arc");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); ensure(14);
+  doc.text("Section", m, y + 9); doc.text("Bars", m + 105, y + 9); doc.text("Level", m + 155, y + 9); doc.text("What changes", m + 245, y + 9); y += 14;
+  doc.setFont("helvetica", "normal");
+  ps.arc.forEach((r) => {
+    const lines = doc.splitTextToSize(ascii(r.change + (r.silence ? `. ${r.silence}` : "")), W - 245);
+    ensure(lines.length * 10 + 4);
+    doc.text(ascii(r.section), m, y + 9); doc.text(ascii(r.bars), m + 105, y + 9); doc.text(ascii(r.level), m + 155, y + 9);
+    lines.forEach((l, i) => doc.text(l, m + 245, y + 9 + i * 10)); y += lines.length * 10 + 4;
+  });
+  y += 4;
+  h2("Non-negotiables"); ps.nonNegotiables.forEach((x) => p(`- ${x}`));
+  h2("Mix priorities"); ps.mix.forEach((x) => p(`- ${x}`));
+  doc.addPage(); y = m;
+  h2("Session notes");
+  const se = b.session;
+  p(`Tempo and click: ${se.tempo}`); p(`Key: ${se.key}`); if (se.range) p(`Vocal range: ${se.range}`);
+  p("Chords by bar:", 10, "bold"); se.chords.forEach((c) => p(c, 9));
+  p(`Tracking: ${se.tracking}`); p(`Blend and panning: ${se.panning}`);
   h2("Score and parts");
-  p("Full score and parts (one PDF): Voice, Guitar, Keys, Bass, Drums. Lead sheet. Nashville chart.");
+  p(`Full score and parts (one PDF): ${D.instruments(rec).map((x) => x.name).join(", ")}. Lead sheet. Nashville chart.`);
   footer(doc, rec, "songbook");
   return doc.output("arraybuffer");
 }

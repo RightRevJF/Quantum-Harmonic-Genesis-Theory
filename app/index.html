@@ -191,6 +191,24 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .fname { min-width: 0; overflow-wrap: anywhere; }
 .abcpreview { background: #fff; border-radius: 8px; padding: 8px; overflow-x: auto; color: #000; }
 .abcpreview svg { max-width: 100%; height: auto; }
+.maptable { overflow-x: auto; }
+.maptable table { border-collapse: collapse; font-size: 0.8rem; min-width: 100%; }
+.maptable th, .maptable td { padding: 4px; text-align: center; border-bottom: 1px solid var(--line); }
+.maptable thead th { font: 600 0.7rem var(--mono); color: var(--muted); white-space: nowrap; }
+.maptable tbody th { text-align: left; font-weight: 600; white-space: nowrap; }
+.lev { font: 0.75rem var(--mono); padding: 6px 6px; min-width: 56px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.lev-sparse, .lev-brush, .lev-intro, .lev-fade, .lev-quiet { background: var(--accent-soft); color: var(--ink); }
+.lev-on, .lev-light, .lev-pre { background: var(--accent); color: var(--accent-ink); opacity: 0.75; }
+.lev-full, .lev-max { background: var(--accent); color: var(--accent-ink); }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 0.9rem; }
+.check input { width: auto; margin-top: 3px; }
+.arc { display: grid; gap: 4px; }
+.arcrow { display: grid; grid-template-columns: 110px 1fr 32px; gap: 8px; align-items: center; font-size: 0.85rem; }
+.arcname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arcbar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+.arcfill { display: block; height: 100%; background: var(--brass); }
+.arcdyn { font: 600 0.75rem var(--mono); color: var(--muted); }
+.mini li.warn { color: var(--flag); }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

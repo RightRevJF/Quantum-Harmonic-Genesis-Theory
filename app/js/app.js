@@ -12,6 +12,7 @@ import * as Floor from "./engine/floor.js";
 import * as Docs from "./engine/docs.js";
 import * as Pdf from "./pdf.js";
 import * as Lily from "./engine/lily.js";
+import * as Prod from "./engine/production.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -101,9 +102,9 @@ function logChoice(s, entry) {
   s.log.push({ ...entry, at: new Date().toISOString() });
 }
 
-const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", harmony: "(b) Harmony", lyric: "(c) Lyric skeleton", melody: "(d) Melody", done: "Completion" };
-const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "harmony", "lyric", "melody", "done"];
-const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "harmony", "lyric", "melody", "done"];
+const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", harmony: "(b) Harmony", lyric: "(c) Lyric skeleton", melody: "(d) Melody", production: "(e) Production", done: "Completion" };
+const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "harmony", "lyric", "melody", "production", "done"];
+const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "harmony", "lyric", "melody", "production", "done"];
 
 // ---------- Claude helpers ----------
 function claudeReady() { return Boolean(cap.sample); }
@@ -236,7 +237,7 @@ function viewSong() {
   const m = manifest(s, result);
   const body = {
     seed: stepSeed, paste: stepPaste, q0: stepQ0, triage: stepTriage, confirm: stepConfirm,
-    intake: stepIntake, tension: stepTension, contract: stepContract, harmony: stepHarmony, lyric: stepLyric, melody: stepMelody, done: stepDone,
+    intake: stepIntake, tension: stepTension, contract: stepContract, harmony: stepHarmony, lyric: stepLyric, melody: stepMelody, production: stepProduction, done: stepDone,
   }[s.step];
   return h("main", { class: "wrap" },
     h("div", { class: "topbar" },
@@ -730,11 +731,12 @@ function stepDone(s) {
         h("p", { text: c.reading || "" }), c.lost ? h("p", { class: "ffix", text: c.lost }) : null)
         : claudeReady() ? h("button", { class: "btn", onclick: () => completion(s) }, "Run the completion check") : h("p", { class: "help", text: "Read the lyric against your words above. If something was lost, unlock and keep writing." }),
       s.melody ? h("div", { class: "row wrap" },
-        h("button", { class: "btn", onclick: () => { const tl = melodyTimeline(s); Audio.play(tl, { bpm: s.contract.bpm || 80, beatsPerBar: s.contract.beatsPerBar || 4, key: Mel.parseKey(s.contract.key) }); } }, "▶ Hear the song"),
+        h("button", { class: "btn", onclick: () => { const rec = songRecordFor(s); if (rec) Audio.playArrangement(rec, Docs.arrangement(rec)); } }, "▶ Hear the song"),
         h("button", { class: "btn ghost", onclick: () => Audio.stop() }, "■ Stop"),
+        h("button", { class: "btn ghost", onclick: () => { ui.prodPlan = null; s.step = "production"; save(); render(); } }, s.production ? "Change the production notes" : "Write the production notes"),
         cap.downloads ? h("button", { class: "btn", onclick: async () => {
-          const tl = melodyTimeline(s);
-          const data = Audio.midiFile(tl, { bpm: s.contract.bpm || 80, beatsPerBar: s.contract.beatsPerBar || 4, key: Mel.parseKey(s.contract.key) }, s.contract.title);
+          const rec = songRecordFor(s); if (!rec) return;
+          const data = Audio.midiFromRecord(rec, Docs.arrangement(rec));
           try { await cap.downloads.save({ filename: `${(s.contract.title || "song").replace(/[^\w\s-]/g, "").trim() || "song"}.mid`, data }); } catch { /* declined */ }
         } }, "Save MIDI") : null) : h("button", { class: "btn primary", onclick: () => { s.step = "melody"; save(); render(); } }, "Find a melody"),
       h("div", { class: "row wrap" }, saveBtn, copyBtn,
@@ -744,7 +746,7 @@ function stepDone(s) {
     docsCard(s),
     h("section", { class: "card" },
       h("p", { class: "eyebrow", text: "Next in the engine" }),
-      h("p", { text: "Checkpoint (e) comes next: the production notes, which will replace the starting band arrangement and add the producer's page to the songbook. Then the demo." }),
+      h("p", { text: "Next: the demo (the band playing these parts as audio), melisma on held syllables, and the song cycle." }),
       s.melody ? h("button", { class: "link", onclick: () => { s.step = "melody"; save(); render(); } }, "‹ Back to the melody search") : null,
     ),
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
@@ -945,6 +947,108 @@ function docsCard(s) {
   );
 }
 
+// ---------- checkpoint (e): production notes ----------
+function prodPlan(s) {
+  if (!ui.prodPlan) ui.prodPlan = s.production && s.production.plan ? JSON.parse(JSON.stringify(s.production.plan)) : Prod.defaultPlan(s.type, Mel.makeBrief(s, s.lyric).voiceName);
+  return ui.prodPlan;
+}
+function recordWithPlan(s, plan) {
+  const pc = pickedCandidate(s);
+  if (!pc || !pc.same) return null;
+  return Docs.buildRecord(pc.cand, pc.brief, { ...s, production: { ...(s.production || {}), plan } });
+}
+const LEVEL_CYCLE = ["off", "sparse", "on", "full"];
+const DRUM_CYCLE = ["off", "intro", "brush", "light", "pre", "full", "quiet", "max", "fade"];
+const LEVEL_SHOW = { off: "—", sparse: "sparse", on: "on", full: "full", intro: "intro", brush: "brush", light: "light", pre: "build", quiet: "half-time", max: "max", fade: "fade", silent: "—" };
+
+async function draftTarget(s, rec, arr) {
+  if (!claudeReady()) return;
+  try {
+    const r = await askJSON(`You are a record producer writing the emotional target and references for a song's producer one-sheet. Write for musicians, plainly, with no technical engine terms.
+
+Song: "${rec.title}". What the writer says it is about (their words): ${s.q0 || "(not given)"}. Tension: ${(s.tension && s.tension.statement) || ""}. Key ${rec.ks.name} ${rec.key.mode}, ${rec.bpm} BPM, ${rec.feel || ""}. Instruments: ${arr.layers.map((l) => l.name).join(", ")} (${arr.palette.context}).
+
+Return JSON only: {"target": "two sentences: what the listener should feel, and how the record gets them there", "references": [{"song": "Artist - Song", "take": "one line on what to take from it"}, {...}, {...}]}
+Only name real, well-known recordings you are confident exist.`, "Drafting the emotional target");
+    ui.prodTarget = r.target || "";
+    ui.prodRefs = (r.references || []).slice(0, 3).map((x) => `${x.song}: ${x.take}`);
+    render();
+  } catch { /* shown */ }
+}
+
+function stepProduction(s) {
+  const plan = prodPlan(s);
+  const rec = recordWithPlan(s, plan);
+  if (!rec) return card("Checkpoint (e)", "Choose a melody first.", "", h("button", { class: "btn", onclick: () => { s.step = "melody"; save(); render(); } }, "Back to the melody search"));
+  const arr = Docs.arrangement(rec);
+  const arc = Prod.energyArc(rec, arr);
+  const reg = Prod.registerAudit(rec, arr);
+  const suggestions = Prod.suggestPalettes(s.type);
+  const others = Object.keys(Prod.PALETTES).filter((k) => !suggestions.includes(k));
+  const setPalette = (id) => { ui.prodPlan = Prod.planFor(id); ui.prodPlan.silence = plan.silence; ui.prodPlan.tag = plan.tag; render(); };
+  const usedRoles = Prod.ROLES.filter((r) => arr.roles.includes(r));
+  const table = h("div", { class: "maptable" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", { text: "" }), arr.layers.map((l) => h("th", { text: l.name })))),
+    h("tbody", {}, usedRoles.map((role) => h("tr", {},
+      h("th", { text: `${Prod.ROLE_NAME[role]} · ${plan.dynamics[role]}` }),
+      arr.layers.map((l) => {
+        const lev = (plan.levels[l.id] || {})[role] || "off";
+        return h("td", {}, h("button", { class: "lev lev-" + lev, title: "Tap to change", onclick: () => {
+          const cyc = l.kind === "drums" ? DRUM_CYCLE : LEVEL_CYCLE;
+          plan.levels[l.id][role] = cyc[(cyc.indexOf(lev) + 1) % cyc.length]; render();
+        } }, LEVEL_SHOW[lev] || lev));
+      }))))));
+  const dynRow = h("div", { class: "row wrap" }, usedRoles.map((role) => {
+    const sel = h("select", { id: "dyn-" + role, "aria-label": `${Prod.ROLE_NAME[role]} level` }, ["p", "mp", "mf", "f", "ff"].map((d) => { const o = h("option", { value: d, text: `${Prod.ROLE_NAME[role]}: ${d}` }); if (plan.dynamics[role] === d) o.selected = true; return o; }));
+    sel.addEventListener("change", () => { plan.dynamics[role] = sel.value; render(); });
+    return sel;
+  }));
+  const silenceBox = h("input", { type: "checkbox", id: "silence" }); silenceBox.checked = plan.silence !== false;
+  silenceBox.addEventListener("change", () => { plan.silence = silenceBox.checked; render(); });
+  const tagBox = h("input", { type: "checkbox", id: "tagbox" }); tagBox.checked = plan.tag !== false;
+  tagBox.addEventListener("change", () => { plan.tag = tagBox.checked; render(); });
+  const target = h("textarea", { id: "target", rows: "3", placeholder: "What the listener should feel, and how the record gets them there" });
+  target.value = ui.prodTarget ?? (s.production && s.production.target) ?? Prod.oneSheet(rec, s, arr).target;
+  const refs = [0, 1, 2].map((i) => { const x = h("input", { id: "ref" + i, placeholder: `Reference ${i + 1}: Artist - Song: what to take from it` }); x.value = (ui.prodRefs || (s.production && s.production.references) || [])[i] || ""; return x; });
+  const maxE = Math.max(...arc.rows.map((r) => r.energy), 0.01);
+  return h("div", { class: "stack" },
+    card("Checkpoint (e) · Production notes", "Dress the song for the room.", "Pick a palette, then shape who plays where. The lead instrument answers the voice in its rests; nothing covers the held title note. The band stops for a beat before the final chorus so its return lands.",
+      optionList(suggestions.map((id) => `${Prod.PALETTES[id].name}: ${Prod.PALETTES[id].layers.map((l) => l.name).join(", ")}`), 0, (i) => setPalette(suggestions[i])),
+      h("div", { class: "row" }, (() => { const sel = h("select", { id: "otherpal", "aria-label": "Another palette" }, h("option", { value: "", text: "Another palette…" }), others.map((k) => h("option", { value: k, text: Prod.PALETTES[k].name }))); sel.addEventListener("change", () => sel.value && setPalette(sel.value)); return sel; })()),
+      h("p", { class: "fine", text: `Now: ${arr.palette.name} (${arr.palette.context}).` })),
+    h("section", { class: "card" },
+      h("p", { class: "eyebrow", text: "Who plays where · tap a cell to change it" }), table,
+      h("p", { class: "label", text: "Level by section" }), dynRow,
+      h("label", { class: "check", for: "silence" }, silenceBox, h("span", { text: arr.approachBar >= 0 ? `The designed silence: the band stops at the half bar of bar ${arr.approachBar + 1}, before the final chorus` : "The designed silence before the final chorus (needs two choruses)" })),
+      h("label", { class: "check", for: "tagbox" }, tagBox, h("span", { text: "A 4-bar tag at the end, home on the tonic" })),
+      h("div", { class: "row wrap" },
+        h("button", { class: "btn small", onclick: () => Audio.playArrangement(rec, arr) }, "▶ Hear the arrangement"),
+        h("button", { class: "btn small", onclick: () => { const fc = rec.sections.find((x, i) => arr.roles[i] === "final") || rec.sections.find((x) => x.kind === "chorus"); const from = Math.max(0, (fc.startBar - 3) * rec.barLen); Audio.playArrangement(rec, arr, { from, to: from + 6 * rec.barLen }); } }, "▶ Into the final chorus"),
+        h("button", { class: "btn small ghost", onclick: () => Audio.stop() }, "■ Stop"))),
+    h("section", { class: "card" },
+      h("p", { class: "eyebrow", text: "The energy arc · Module 9.12" }),
+      h("div", { class: "arc" }, arc.rows.map((r) => h("div", { class: "arcrow" }, h("span", { class: "arcname", text: r.name }), h("span", { class: "arcbar" }, h("span", { class: "arcfill", style: `width:${Math.round((r.energy / maxE) * 100)}%` })), h("span", { class: "arcdyn", text: r.dyn })))),
+      h("p", { class: "fine", text: arc.lift !== null ? `Verse to chorus, notes a bar ×${arc.lift}: ${arc.liftBand}.` : "" }),
+      arc.flags.length ? h("ul", { class: "mini" }, arc.flags.map((f) => h("li", { class: "warn", text: f }))) : h("p", { class: "fine", text: "No inversions: each chorus is above its verse, the bridge is below the final chorus, the final chorus is the top." }),
+      h("p", { class: "eyebrow", text: "Register · Module 9.13" }),
+      h("ul", { class: "mini" }, reg.filter((r) => r.share || r.crowdedKeyBars.length).map((r) => h("li", { text: `${r.name}: ${Math.round(r.share * 100)}% of the band's notes inside the voice's range${r.worst.bar ? ` (worst bar ${r.worst.bar}: ${r.worst.tracks.join(", ") || "none"})` : ""}${r.crowdedKeyBars.length ? `; crowded under the held notes in bar ${r.crowdedKeyBars.join(", ")}` : ""}` }))),
+    ),
+    h("section", { class: "card" },
+      h("p", { class: "eyebrow", text: "The producer one-sheet" }),
+      h("label", { class: "field", for: "target" }, h("span", { text: "Emotional target" }), target),
+      h("p", { class: "label", text: "Three references" }), ...refs,
+      h("p", { class: "fine", text: "References are suggestions to check by listening; the app cannot search the web to verify them." }),
+      claudeReady() ? h("button", { class: "btn small", onclick: () => draftTarget(s, rec, arr) }, "Draft the target and references with Claude") : null,
+      h("button", { class: "btn primary", onclick: () => {
+        s.production = { plan: JSON.parse(JSON.stringify(plan)), target: target.value.trim(), references: refs.map((x) => x.value.trim()).filter(Boolean) };
+        logChoice(s, { id: "Production", question: "Production notes (checkpoint e)", answer: `${Prod.PALETTES[plan.palette].name}; silence ${plan.silence ? "yes" : "no"}; tag ${plan.tag ? "yes" : "no"}; arc flags: ${arc.flags.length ? arc.flags.join(" ") : "none"}` });
+        s.lastRule = "Module 9.12, 9.13";
+        ui.prodPlan = null; ui.prodTarget = undefined; ui.prodRefs = undefined;
+        Audio.stop(); s.step = "done"; save(); render(); window.scrollTo(0, 0); if (!s.completion) completion(s);
+      } }, "Save the production notes")),
+  );
+}
+
 // ---------- checkpoint (d): the melody search ----------
 const SVGNS = "http://www.w3.org/2000/svg";
 function svg(tag, attrs = {}, ...kids) {
@@ -1016,8 +1120,8 @@ function chooseMelody(s, cand, brief, reason) {
   s.melodyMap = { songTotal: mp.songTotal, hookPeak: mp.hookPeak, versePeak: mp.versePeak, over: mp.over.length, budget: { total: mp.budget.total, ceiling: mp.budget.ceiling } };
   logChoice(s, { id: "Melody", question: "Which melody?", options: ui.search.result.top.map((c) => `#${c.rank} (candidate ${c.id})`), recommended: "#1", answer: `#${cand.rank} (candidate ${cand.id})${reason ? " because: " + reason : ""}` });
   Audio.stop();
-  ui.error = null;
-  s.step = "done"; save(); render(); window.scrollTo(0, 0); completion(s);
+  ui.error = null; ui.prodPlan = null;
+  s.step = "production"; save(); render(); window.scrollTo(0, 0);
 }
 
 function stepMelody(s) {

@@ -40,8 +40,10 @@ test("one record feeds the score, parts, chart and songbook", async () => {
   const rec = D.buildRecord(res.top[0], b, song);
   assert.equal(rec.sections[0].name, "Intro");
   assert.equal(rec.sections[1].startBar, 5);
-  const score = D.scoreSystems(rec, D.INSTRUMENTS.map((x) => x.id), { per: 4 });
-  assert.match(score[0].abc, /%%score V G \{R L\} B D/);
+  const ids = D.instruments(rec).map((x) => x.id);
+  assert.deepEqual(ids, ["voice", "fill", "guitar", "keys", "pad", "bass", "drums"], "a love song defaults to the Americana palette");
+  const score = D.scoreSystems(rec, ids, { per: 4 });
+  assert.match(score[0].abc, /%%score V A B \{R L\} E F D/);
   assert.match(score[0].abc, /K:Eb/);
   assert.match(score[0].abc, /C:Words and music: J\. B\./);
   // every system's voice line has as many bars as it claims
@@ -62,10 +64,14 @@ test("bars in every voice add up to the meter", async () => {
   const res = await M.search(b, { n: 200, seed: 1 });
   const rec = D.buildRecord(res.top[0], b, song);
   const arr = D.arrangement(rec);
-  for (const part of ["keysRH", "keysLH", "guitar", "bass", "drums"]) {
-    const perBar = new Map();
-    arr[part].forEach((e) => { const bar = Math.floor(e.t / rec.barLen); perBar.set(bar, (perBar.get(bar) || 0) + e.dur); });
-    perBar.forEach((d, bar) => assert.equal(d, rec.barLen, `${part} bar ${bar + 1}`));
+  for (const ly of arr.layers) {
+    if (ly.kind === "fill") continue; // fills answer the voice in its rests
+    const hands = ly.kind === "piano" ? ["R", "L"] : [undefined];
+    hands.forEach((hand) => {
+      const perBar = new Map();
+      ly.events.filter((e) => e.hand === hand).forEach((e) => { const bar = Math.floor(e.t / rec.barLen); perBar.set(bar, (perBar.get(bar) || 0) + e.dur); });
+      perBar.forEach((d, bar) => { if (bar !== arr.approachBar) assert.equal(d, rec.barLen, `${ly.name}${hand || ""} bar ${bar + 1}`); });
+    });
   }
 });
 
@@ -90,5 +96,5 @@ test("LilyPond: Module 11 rules, and it engraves when LilyPond is installed", as
   writeFileSync(`${dir}/song.ly`, ly);
   execFileSync("lilypond", ["-s", "-o", dir, `${dir}/song.ly`], { stdio: "ignore" });
   const pdfs = readdirSync(dir).filter((f) => f.endsWith(".pdf")).sort();
-  assert.deepEqual(pdfs, ["song-bass.pdf", "song-drums.pdf", "song-guitar.pdf", "song-keys.pdf", "song-lead-sheet.pdf", "song-score.pdf", "song-voice.pdf"]);
+  assert.deepEqual(pdfs, ["song-bass.pdf", "song-drums.pdf", "song-fill.pdf", "song-guitar.pdf", "song-keys.pdf", "song-lead-sheet.pdf", "song-pad.pdf", "song-score.pdf", "song-voice.pdf"]);
 });

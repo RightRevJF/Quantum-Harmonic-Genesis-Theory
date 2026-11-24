@@ -40,7 +40,18 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
 
     - **LilyPond file (.ly):** one file holds the lead sheet, the full score and every part, following Module 11. The vocal melody is written with `\relative c'`, a male voice uses `\clef "treble_8"` at sounding pitch, and congregational melody is moved up an octave at the score level. Empty bars are compressed, guitar is written as slashes and drums in `\drummode`. Running `lilypond file.ly` writes seven PDFs and a MIDI file. Check it with `node tools/check_lily.mjs <dir> [type] [key] [voice]`.
 
-    The quick PDFs are engraved in the browser with abcjs 6.4.4 and placed into the PDF with jsPDF 2.5.1 (both loaded from jsDelivr). The band parts are a starting arrangement from the chords and the section roles until checkpoint (e).
+    The quick PDFs are engraved in the browser with abcjs 6.4.4 and placed into the PDF with jsPDF 2.5.1 (both loaded from jsDelivr). The band parts come from checkpoint (e)'s arrangement (or the type's default palette until it is set).
+
+13. **Checkpoint (e), production notes:**
+    - **Palette (9.6):** Americana, folk, worship, blues, cinematic or pop band. The lead is breath-, wood- or string-driven, and no pad leads.
+    - **Who plays where (9.8):** a section-by-section map you can change by tapping a cell, with dynamics.
+    - **The designed silence (Part VI):** the band stops at the half bar before the final chorus.
+    - **The tag:** four bars home on the tonic.
+    - **The energy arc (9.12):** checked against Window 38's verse-to-chorus lift, with any inversions and flatlines named.
+    - **Register collision (9.13):** keys and strings are re-voiced above the voice at the key bars, within 9.14's low-interval limits.
+    - **The producer one-sheet:** emotional target, three references, dynamic arc, non-negotiables and mix priorities, plus session notes. It goes into the songbook on its own page.
+
+    Every document, the playback and the multi-track MIDI use this arrangement.
 
 The app also has a **lyric-first path** (Module 29): paste a finished lyric and the app measures it.
 
@@ -87,9 +98,9 @@ Tests: `npm test` (Node 20 or later).
 
 ## What comes next
 
-This is stage 5: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map, the floor on the finished song, and the documents. Still to come:
+This is stage 6: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map, the floor on the finished song, the documents and the production notes. Still to come:
 
 - (e) the production notes;
-- the producer's page in the songbook and the demo.
+- the audio demo; melisma; the song cycle (Module 26).
 
 Luthier © Jason Bryant 2026.

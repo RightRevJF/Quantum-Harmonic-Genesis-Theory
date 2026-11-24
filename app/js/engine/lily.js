@@ -6,7 +6,7 @@
 // up an octave at the score level (11.7); \compressMMRests with chord-name skips as a
 // single s1*n; strummed guitar as slashes (\improvisationOn); drums in \drummode.
 
-import { spell, arrangement, keySpelling, PLAYER_NOTES, hyphenate } from "./docs.js";
+import { spell, arrangement, keySpelling, hyphenate, noteFor } from "./docs.js";
 import { parseChord } from "./harmony.js";
 
 const LETTER_IDX = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
@@ -56,7 +56,7 @@ function bars(events, rec) {
   return out.map((evs) => evs.sort((a, b) => a.t - b.t));
 }
 
-function music(events, rec, render, { rest = "r", marks = null } = {}) {
+function music(events, rec, render, { rest = "r", marks = null, dyn = null } = {}) {
   const per = bars(events, rec);
   const lines = per.map((evs, b) => {
     const t0 = b * rec.barLen;
@@ -67,7 +67,11 @@ function music(events, rec, render, { rest = "r", marks = null } = {}) {
     evs.forEach((e) => {
       if (e.t > pos) toks.push(...restTokens(e.t - pos, rest));
       const pieces = split(e.dur);
-      pieces.forEach((x, i) => { toks.push(render(e, i === 0) + DUR[x] + (i < pieces.length - 1 || e.tieOut ? "~" : "")); });
+      pieces.forEach((x, i) => {
+        let d = "";
+        if (dyn && dyn[b] && !e.cont && i === 0) { d = "\\" + dyn[b]; dyn[b] = null; }
+        toks.push(render(e, i === 0) + DUR[x] + d + (i < pieces.length - 1 || e.tieOut ? "~" : ""));
+      });
       pos = e.t + e.dur;
     });
     if (pos < t0 + rec.barLen) toks.push(...restTokens(t0 + rec.barLen - pos, rest));
@@ -115,25 +119,39 @@ function header(rec, sub) {
   return `\\header {\n  title = "${esc(rec.title)}"\n${sub ? `  subtitle = "${esc(sub)}"\n` : ""}${rec.writer ? `  composer = "Words and music: ${esc(rec.writer)}"\n` : ""}  tagline = ##f\n}`;
 }
 
+const VAR = (i) => "part" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i];
+function dynMap(rec, arr) {
+  const m = {};
+  rec.sections.forEach((sec, i) => { m[sec.startBar - 1] = arr.plan.dynamics[arr.roles[i]]; });
+  return m;
+}
+
 function variables(rec) {
   const ks = rec.ks;
   const arr = arrangement(rec);
   const marks = marksFor(rec);
   const rel = { pos: 4 * 7 }; // c'
   const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, p: n.p }));
-  const melody = music(melodyEvents, rec, (e, first) => (first ? lyRel(e.p, ks, rel) : lyRel(e.p, ks, rel)), { marks });
+  const melody = music(melodyEvents, rec, (e) => lyRel(e.p, ks, rel), { marks });
   const absChord = (e) => (e.ps.length > 1 ? `<${e.ps.map((p) => lyAbs(p, ks)).join(" ")}>` : lyAbs(e.ps[0], ks));
-  const keysRH = music(arr.keysRH, rec, absChord);
-  const keysLH = music(arr.keysLH, rec, absChord);
-  const bass = music(arr.bass, rec, absChord);
-  const guitar = music(arr.guitar, rec, () => "b'");
   const DR = { K: "bd", S: "sn", H: "hh", C: "cymc" };
-  const drums = music(arr.drums, rec, (e) => (e.hits.length > 1 ? `<${e.hits.map((x) => DR[x]).join(" ")}>` : DR[e.hits[0]]));
   const bar = (ls) => ls.map((l) => `  ${l} |`).join("\n");
   const clef = rec.voiceName === "congregational" ? "treble" : rec.male ? "\"treble_8\"" : "treble";
   const melodyVar = rec.voiceName === "congregational"
     ? `melody = \\transpose c c' \\relative c' {\n  \\global \\clef ${clef}\n${bar(melody)}\n  \\bar "|."\n}`
     : `melody = \\relative c' {\n  \\global \\clef ${clef}\n${bar(melody)}\n  \\bar "|."\n}`;
+  const parts = [];
+  arr.layers.forEach((ly, i) => {
+    const name = VAR(i);
+    const dyn = dynMap(rec, arr);
+    const clefFor = () => { const ps = ly.events.flatMap((e) => e.ps || []).sort((a, b) => a - b); return ly.kind === "bass" || (ps.length && ps[Math.floor(ps.length / 2)] < 57) ? "bass" : "treble"; };
+    if (ly.kind === "drums") parts.push(`${name} = \\drummode {\n  \\time ${rec.beatsPerBar}/4\n${bar(music(ly.events, rec, (e) => (e.hits.length > 1 ? `<${e.hits.map((x) => DR[x]).join(" ")}>` : DR[e.hits[0]]), { dyn }))}\n  \\bar "|."\n}`);
+    else if (ly.kind === "strum") parts.push(`${name} = {\n  \\global \\clef treble \\improvisationOn\n${bar(music(ly.events, rec, () => "b'", { dyn }))}\n  \\bar "|."\n}`);
+    else if (ly.kind === "piano") {
+      parts.push(`${name}Right = {\n  \\global \\clef treble\n${bar(music(ly.events.filter((e) => e.hand === "R"), rec, absChord, { dyn }))}\n  \\bar "|."\n}`);
+      parts.push(`${name}Left = {\n  \\global \\clef bass\n${bar(music(ly.events.filter((e) => e.hand === "L"), rec, absChord))}\n  \\bar "|."\n}`);
+    } else parts.push(`${name} = {\n  \\global \\clef ${clefFor()}\n${bar(music(ly.events, rec, absChord, { dyn }))}\n  \\bar "|."\n}`);
+  });
   return [
     `\\version "2.24.0"`,
     `\\language "nederlands"`,
@@ -141,21 +159,21 @@ function variables(rec) {
     melodyVar,
     `words = \\lyricmode {\n  ${lyricsFor(rec)}\n}`,
     `harmonies = \\chordmode {\n  ${chordsMusic(rec)}\n}`,
-    `guitarPart = {\n  \\global \\clef treble \\improvisationOn\n${bar(guitar)}\n  \\bar "|."\n}`,
-    `keysRight = {\n  \\global \\clef treble\n${bar(keysRH)}\n  \\bar "|."\n}`,
-    `keysLeft = {\n  \\global \\clef bass\n${bar(keysLH)}\n  \\bar "|."\n}`,
-    `bassPart = {\n  \\global \\clef bass\n${bar(bass)}\n  \\bar "|."\n}`,
-    `drumPart = \\drummode {\n  \\time ${rec.beatsPerBar}/4\n${bar(drums)}\n  \\bar "|."\n}`,
+    ...parts,
   ].join("\n\n");
 }
 
-const STAFF = {
-  voice: `\\new Staff \\with { instrumentName = "Voice" shortInstrumentName = "Vo." } { \\new Voice = "mel" { \\melody } }\n      \\new Lyrics \\lyricsto "mel" { \\words }`,
-  guitar: `\\new Staff \\with { instrumentName = "Guitar" shortInstrumentName = "Gtr." } { \\guitarPart }`,
-  keys: `\\new PianoStaff \\with { instrumentName = "Keys" shortInstrumentName = "Kb." } <<\n        \\new Staff { \\keysRight }\n        \\new Staff { \\keysLeft }\n      >>`,
-  bass: `\\new Staff \\with { instrumentName = "Bass" shortInstrumentName = "Bs." } { \\bassPart }`,
-  drums: `\\new DrumStaff \\with { instrumentName = "Drums" shortInstrumentName = "Dr." } { \\drumPart }`,
-};
+function staffFor(rec, id) {
+  if (id === "voice") return `\\new Staff \\with { instrumentName = "Voice" shortInstrumentName = "Vo." } { \\new Voice = "mel" { \\melody } }\n      \\new Lyrics \\lyricsto "mel" { \\words }`;
+  const arr = arrangement(rec);
+  const i = arr.layers.findIndex((l) => l.id === id);
+  const ly = arr.layers[i];
+  const nm = esc(ly.name), sh = esc(ly.name.slice(0, 3)) + ".";
+  if (ly.kind === "drums") return `\\new DrumStaff \\with { instrumentName = "${nm}" shortInstrumentName = "${sh}" } { \\${VAR(i)} }`;
+  if (ly.kind === "piano") return `\\new PianoStaff \\with { instrumentName = "${nm}" shortInstrumentName = "${sh}" } <<\n        \\new Staff { \\${VAR(i)}Right }\n        \\new Staff { \\${VAR(i)}Left }\n      >>`;
+  return `\\new Staff \\with { instrumentName = "${nm}" shortInstrumentName = "${sh}" midiInstrument = "${MIDI_NAMES[ly.gm] || "acoustic grand"}" } { \\${VAR(i)} }`;
+}
+const MIDI_NAMES = { 0: "acoustic grand", 16: "drawbar organ", 22: "harmonica", 24: "acoustic guitar (nylon)", 25: "acoustic guitar (steel)", 27: "electric guitar (clean)", 32: "acoustic bass", 33: "electric bass (finger)", 40: "violin", 42: "cello", 43: "contrabass", 48: "string ensemble 1", 73: "flute" };
 
 export function leadSheetLy(rec) {
   return `${variables(rec)}
@@ -166,7 +184,7 @@ export function leadSheetLy(rec) {
   \\score {
     <<
       \\new ChordNames { \\harmonies }
-      ${STAFF.voice}
+      ${staffFor(rec, "voice")}
     >>
     \\layout { \\context { \\Score \\override BarNumber.break-visibility = ##(#f #t #t) } }
   }
@@ -174,30 +192,30 @@ export function leadSheetLy(rec) {
 `;
 }
 
-const PARTS = [["voice", "Voice"], ["guitar", "Guitar"], ["keys", "Keys"], ["bass", "Bass"], ["drums", "Drums"]];
-
 export function scoreAndPartsLy(rec) {
-  const roleOf = (k) => ({ intro: "intro", verse: "verse", prechorus: "build", chorus: "full", bridge: "thin" }[k] || "verse");
+  const arr = arrangement(rec);
+  const ids = ["voice", ...arr.layers.map((l) => l.id)];
+  const names = { voice: "Voice", ...Object.fromEntries(arr.layers.map((l) => [l.id, l.name])) };
   const noteMarkup = (id) => {
-    const notes = PLAYER_NOTES[id];
-    if (!notes) return "";
+    if (id === "voice") return "";
     const seen = new Set();
-    const lines = rec.sections.filter((s) => { const k = s.kind; if (seen.has(k)) return false; seen.add(k); return true; })
-      .map((s) => `\\line { \\bold "${esc(s.name.replace(/\s*\d+$/, ""))}:" "${esc(notes[roleOf(s.kind)])}" }`);
+    const lines = rec.sections.filter((s) => { const k = s.name.replace(/\s*\d+$/, ""); if (seen.has(k)) return false; seen.add(k); return true; })
+      .map((s) => `\\line { \\bold "${esc(s.name.replace(/\s*\d+$/, ""))}:" "${esc(noteFor(rec, id, rec.sections.indexOf(s)))}" }`);
     return `\\markup \\column { ${lines.join(" ")} }`;
   };
-  const partBook = ([id, name]) => `\\book {
+  const kindOf = (id) => (arr.layers.find((l) => l.id === id) || { kind: "voice" }).kind;
+  const partBook = (id) => `\\book {
   \\bookOutputSuffix "${id}"
-  ${header(rec, name)}
+  ${header(rec, names[id])}
   \\score {
     <<
-      ${id === "voice" || id === "guitar" || id === "keys" || id === "bass" ? "\\new ChordNames { \\harmonies }" : ""}
-      \\compressMMRests { << ${STAFF[id]} >> }
+      ${kindOf(id) !== "drums" ? "\\new ChordNames { \\harmonies }" : ""}
+      \\compressMMRests { << ${staffFor(rec, id)} >> }
     >>
     \\layout { }
   }
   ${noteMarkup(id)}
-  ${id === "bass" ? '\\markup \\italic "Written an octave higher than it sounds."' : ""}
+  ${kindOf(id) === "bass" ? '\\markup \\italic "Written an octave higher than it sounds."' : ""}
 }`;
   return `${variables(rec)}
 
@@ -208,14 +226,14 @@ export function scoreAndPartsLy(rec) {
   \\score {
     <<
       \\new ChordNames { \\harmonies }
-      ${PARTS.map(([id]) => STAFF[id]).join("\n      ")}
+      ${ids.map((id) => staffFor(rec, id)).join("\n      ")}
     >>
     \\layout { }
     \\midi { }
   }
 }
 
-${PARTS.map(partBook).join("\n\n")}
+${ids.map(partBook).join("\n\n")}
 `;
 }
 
