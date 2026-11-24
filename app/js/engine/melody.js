@@ -92,10 +92,10 @@ export const WEIGHTS = { spectral: 0.15, cmp: 0.15, horizon: 0.10, fit: 0.15, ic
 const PC = { c: 0, "c#": 1, db: 1, d: 2, "d#": 3, eb: 3, e: 4, f: 5, "f#": 6, gb: 6, g: 7, "g#": 8, ab: 8, a: 9, "a#": 10, bb: 10, b: 11 };
 export function parseKey(text = "") {
   const t = text.trim().toLowerCase().replace("♭", "b").replace("♯", "#");
-  const m = t.match(/^([a-g])([#b])?\s*(m(?:in(?:or)?)?|maj(?:or)?)?/);
+  const m = t.match(/^([a-g])([#b])?\s*(maj(?:or)?|min(?:or)?|m)?\b/);
   if (!m) return { tonic: 7, mode: "major", name: "G major" };
   const tonic = PC[m[1] + (m[2] || "")];
-  const mode = m[3] && m[3].startsWith("m") && !m[3].startsWith("maj") ? "minor" : "major";
+  const mode = m[3] && (m[3] === "m" || m[3].startsWith("min")) ? "minor" : "major";
   const names = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
   return { tonic, mode, name: `${names[tonic]} ${mode}` };
 }
@@ -358,7 +358,7 @@ function buildSection(sec, plan, r, brief, ref) {
       if (!res) { section.unbuildable = true; return; }
       const ivNow = prev === null ? 0 : res.p - prev;
       const ivPrev = prev === null || prev2 === null ? 0 : prev - prev2;
-      const note = { p: res.p, bits: prev === null ? 3 : refBits(ivPrev, ivNow), onset, dur: n.dur, syl: n.syl.text, stress: n.syl.stress, reduced: n.syl.reduced, chord: chord.roman, line: li, peak: isTitle && i === peak, money: isTitle && i === money };
+      const note = { p: res.p, bits: prev === null ? 3 : refBits(ivPrev, ivNow), onset, dur: n.dur, syl: n.syl.text, word: n.syl.word, part: n.syl.part, of: n.syl.of, stress: n.syl.stress, reduced: n.syl.reduced, chord: chord.roman, line: li, peak: isTitle && i === peak, money: isTitle && i === money };
       lineNotes.push(note);
       run = prev === res.p ? run + 1 : 1;
       prev2 = prev; prev = res.p;

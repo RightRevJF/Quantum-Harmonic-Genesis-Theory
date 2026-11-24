@@ -9,6 +9,8 @@ import * as Mel from "./engine/melody.js";
 import * as Audio from "./audio.js";
 import * as Harm from "./engine/harmony.js";
 import * as Floor from "./engine/floor.js";
+import * as Docs from "./engine/docs.js";
+import * as Pdf from "./pdf.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -78,7 +80,7 @@ async function loadSongs() {
 }
 
 // ---------- state ----------
-const ui = { view: "home", songId: null, busy: null, error: null, saved: "", coach: null, showManifest: false, abort: null, stream: "" };
+const ui = { docBusy: null, view: "home", songId: null, busy: null, error: null, saved: "", coach: null, showManifest: false, abort: null, stream: "" };
 const cur = () => (ui.songId ? songs[ui.songId] : null);
 
 function newSong(mode) {
@@ -738,9 +740,10 @@ function stepDone(s) {
         h("button", { class: "btn ghost", onclick: () => { s.locked = false; s.step = "lyric"; logChoice(s, { id: "Unlock", question: "Unlock the lyric", answer: "Unlocked" }); save(); render(); } }, "Unlock and keep writing")),
     ),
     floorCard(s),
+    docsCard(s),
     h("section", { class: "card" },
       h("p", { class: "eyebrow", text: "Next in the engine" }),
-      h("p", { text: "Checkpoint (e) comes next: the production notes. Then the lead sheet, chart, songbook and demo." }),
+      h("p", { text: "Checkpoint (e) comes next: the production notes, which will replace the starting band arrangement and add the producer's page to the songbook. Then the demo." }),
       s.melody ? h("button", { class: "link", onclick: () => { s.step = "melody"; save(); render(); } }, "‹ Back to the melody search") : null,
     ),
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
@@ -892,6 +895,50 @@ function floorCard(s) {
     h("h2", { class: "q", text: f.finished ? "The song clears the floor." : "The song is under the floor." }),
     h("p", { class: "help", text: f.finished ? "Your words sit on the melody the way real songs do, and the singer can breathe. Everything else below is information against real-song bands." : "A song under the alignment or breath floor isn't finished. The fix is usually small: move a syllable, add a rest. Search again or pick another melody." }),
     floorView(f));
+}
+
+// ---------- the documents (Module 11.9) ----------
+function songRecordFor(s) {
+  const pc = pickedCandidate(s);
+  if (!pc || !pc.same) return null;
+  return Docs.buildRecord(pc.cand, pc.brief, s);
+}
+const fileBase = (s) => (s.contract.title || "song").replace(/[^\w\s-]/g, "").trim() || "song";
+async function saveDoc(s, label, make, filename) {
+  ui.docBusy = `Making the ${label}…`; ui.error = null; render();
+  try {
+    const rec = songRecordFor(s);
+    const data = await make(rec, (msg) => { const el = $("#docstatus"); if (el) el.textContent = msg; });
+    if (!cap.downloads) throw Object.assign(new Error("no downloads"), { code: "unavailable" });
+    await cap.downloads.save({ filename, data: new Uint8Array(data) });
+    logChoice(s, { id: "Document", question: "Saved a document", answer: filename });
+    ui.docBusy = null; save(); render();
+  } catch (e) {
+    ui.docBusy = null;
+    ui.error = e && e.code === "unavailable" ? "Saving files isn't available in this view. Open the page in claude.ai to save PDFs." : e && e.code === "declined" ? null : `The ${label} couldn't be made: ${e && e.message ? e.message : "unknown error"}.`;
+    render();
+  }
+}
+function docsCard(s) {
+  if (!s.melody) return null;
+  const rec = songRecordFor(s);
+  if (!rec) return null;
+  const preview = h("div", { class: "abcpreview", "aria-label": "Lead sheet preview" });
+  setTimeout(() => Pdf.previewLeadSheet(preview, rec), 0);
+  const base = fileBase(s);
+  const btn = (label, make, file, primary) => h("button", { class: "btn" + (primary ? " primary" : ""), disabled: ui.docBusy ? true : null, onclick: () => saveDoc(s, label, make, file) }, `Save ${label}`);
+  return h("section", { class: "card" },
+    h("p", { class: "eyebrow", text: "The documents · one record, five files" }),
+    h("h2", { class: "q", text: "Take the song to the band." }),
+    h("p", { class: "help", text: `Every document is written from the same record: ${rec.totalBars} bars, a 4-bar intro, ${rec.ks.name} ${rec.key.mode}, ${rec.bpm} BPM. The band parts are a starting arrangement from the chords and the sections (quiet verse, fuller chorus, a thin bridge) until the production notes are written.` }),
+    preview,
+    ui.docBusy ? h("p", { id: "docstatus", class: "fine", text: ui.docBusy }) : null,
+    h("div", { class: "row wrap" },
+      btn("full score and parts", (r, prog) => Pdf.scoreAndPartsPdf(r, { onProgress: prog }), `${base} - full score and parts.pdf`, true),
+      btn("lead sheet", (r, prog) => Pdf.leadSheetPdf(r, { onProgress: prog }), `${base} - lead sheet.pdf`),
+      btn("Nashville chart", (r) => Pdf.chartPdf(r), `${base} - Nashville chart.pdf`),
+      btn("songbook", (r) => Pdf.songbookPdf(r, s), `${base} - songbook.pdf`)),
+  );
 }
 
 // ---------- checkpoint (d): the melody search ----------

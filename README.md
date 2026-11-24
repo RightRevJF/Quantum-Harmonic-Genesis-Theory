@@ -32,6 +32,14 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
 
     A song under the alignment or breath floor is marked not finished.
 
+12. **The documents (Module 11.9):** every document is written from one song record: a 4-bar intro plus the sections, the chosen melody and the chords.
+    - **Full score and parts (one PDF):** the full score has Voice, Guitar (rhythm slashes under chord names), Keys (two staves), Bass and Drums, followed by a separate part for each player with section notes.
+    - **Lead sheet (PDF):** voice, lyric and chords.
+    - **Nashville chart (PDF):** with drummer notes.
+    - **Songbook (PDF):** for musicians, with no engine terms. It covers the song at a glance, section by section with chords and melody notes by bar, notes for the singer and each player, and the lyric sheet with bar numbers.
+
+    Notation is engraved in the browser with abcjs 6.4.4 and placed into the PDF with jsPDF 2.5.1 (both loaded from jsDelivr). The band parts are a starting arrangement from the chords and the section roles until checkpoint (e).
+
 The app also has a **lyric-first path** (Module 29): paste a finished lyric and the app measures it.
 
 ## What is measured (app/js/engine/lyric.js)
@@ -77,9 +85,9 @@ Tests: `npm test` (Node 20 or later).
 
 ## What comes next
 
-This is stage 4: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map and the floor on the finished song. Still to come:
+This is stage 5: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map, the floor on the finished song, and the documents. Still to come:
 
 - (e) the production notes;
-- the lead sheet, the Nashville chart, the songbook and the demo.
+- the producer's page in the songbook and the demo.
 
 Luthier © Jason Bryant 2026.

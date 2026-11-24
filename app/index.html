@@ -189,6 +189,8 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .fstate { font: 600 0.68rem/1.6 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; grid-row: span 3; }
 .fcheck.pass .fstate { color: var(--ok); } .fcheck.info .fstate { color: var(--info); } .fcheck.flag .fstate { color: var(--flag); } .fcheck.floor .fstate { color: var(--floor); }
 .fname { min-width: 0; overflow-wrap: anywhere; }
+.abcpreview { background: #fff; border-radius: 8px; padding: 8px; overflow-x: auto; color: #000; }
+.abcpreview svg { max-width: 100%; height: auto; }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
@@ -196,4 +198,6 @@ details summary { cursor: pointer; color: var(--accent); font-weight: 500; paddi
 
 <div id="app"><main class="wrap"><p class="eyebrow">Luthier v45 · songwriting engine</p><h1>Start with one line.</h1><p class="lede">Loading the engine…</p></main></div>
 <p id="status" class="status"></p>
+<script defer charset="utf-8" src="https://cdn.jsdelivr.net/npm/abcjs@6.4.4/dist/abcjs-basic-min.js"></script>
+<script defer charset="utf-8" src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script type="module" src="js/app.js"></script>
