@@ -163,6 +163,21 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .roll .nt.money { fill: var(--ink); }
 .roll .chordname { fill: var(--muted); font: 600 10px var(--mono); }
 .roll .syltext { fill: var(--ink); font: 9px var(--body); }
+.secrow { display: grid; gap: 4px; }
+.chords { display: flex; flex-wrap: wrap; gap: 6px; }
+.chordchip { display: grid; min-width: 56px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); text-align: center; }
+.chordchip b { font: 600 1rem var(--display); }
+.chordchip small { font: 0.7rem var(--mono); }
+.chordchip.du1 { border-color: var(--info); background: var(--info-soft); }
+.chordchip.du2 { border-color: var(--flag); background: var(--flag-soft); }
+.chordchip.du3 { border-color: var(--floor); background: var(--floor-soft); }
+.card.recd { border-color: var(--brass); }
+.mini { margin: 0; padding-left: 18px; font-size: 0.85rem; color: var(--muted); display: grid; gap: 2px; }
+.dumap { display: grid; gap: 6px; }
+.dubars { display: flex; align-items: flex-end; gap: 3px; min-height: 50px; padding: 4px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.dub { flex: 0 0 10px; background: var(--accent-soft); border-radius: 2px 2px 0 0; }
+.dub.hook { background: var(--accent); }
+.dub.over { background: var(--floor); }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

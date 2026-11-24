@@ -8,14 +8,20 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
 4. **Type intake:** Claude asks the routed type's own intake questions (N1–N5, V1–V6 and so on) from that module's text. Each question comes with three options, A, B and C, plus a recommendation.
 5. **Checkpoint (a):** the tension, three hooks and a form.
 6. **The contract (Protocol 0b):** title, never-say list, objects, your own phrases, voice, key, tempo and form. The writing room stays closed until the required inputs are filled in.
-7. **Checkpoint (c), the lyric:** Claude drafts from your answers, or you write it yourself. The readings update as you type. You can coach any flagged line (three alternatives, each measured before you see it) or revise with a note.
-8. **Lock and completion check:** the song is checked against your Q0. Then you save the song record, which holds the lyric, the readings, the full intake log and any lines you kept on purpose.
+7. **Checkpoint (b), the harmonic skeleton:**
+   - The app proposes three chord plans, one loop per section, measured in departure units (Window 19.9): borrowed chord 1, secondary dominant or deceptive cadence 2, modulation 3.
+   - Each plan is checked against the type's total budget and per-moment ceiling, with the schema discount (19.10). It also follows Window 28's tendencies: the chorus changes the loop and usually starts off the tonic. Each plan carries the harmonic-expectation score (Window 46).
+   - Your own chords are used unchanged and measured the same way.
+8. **Checkpoint (c), the lyric:** Claude drafts from your answers, or you write it yourself. The readings update as you type. You can coach any flagged line (three alternatives, each measured before you see it) or revise with a note.
+9. **Lock and completion check:** the song is checked against your Q0. Then you save the song record, which holds the lyric, the readings, the full intake log and any lines you kept on purpose.
 
-9. **Checkpoint (d), the melody search (Module 27):**
+10. **Checkpoint (d), the melody search (Module 27):**
    - The engine writes 3,000 candidates from the locked lyric. The hook is written title-first: stressed syllables go on the beat, the high note falls on the first strong syllable, and the last strong syllable is held on a stable degree.
    - Each candidate is filtered against the type's Table A row (tessitura, passaggio, leaps, range, density, syncopation and monotony), rejected against Table B, then ranked with the Table C weights.
    - The order is fingerprinted before anything is played. The top three can be heard with chords and bass and seen as piano rolls.
    - Choosing anything other than #1 needs a sentence of reason. The chosen melody can be saved as a MIDI file.
+
+   - Each candidate shows its departure map: the harmonic, melodic and rhythmic DU of every phrase against the ceiling. The spec's practical test is that the hook reaches the ceiling and the verse stays below it.
 
 The app also has a **lyric-first path** (Module 29): paste a finished lyric and the app measures it.
 
@@ -53,15 +59,15 @@ Tests: `npm test` (Node 20 or later).
 
 - **Realness (27.8, 0.25 of the rank).** It needs the reference set of 3,310 real choruses. The expectation term (0.05) needs the harmony search. Both are left out, and the other weights are kept in proportion.
 - **The interval model.** It is a hand-set stand-in for the POP909-trained model. Surprisal is read under a fixed reference interval model, so every candidate is judged by the same listener and not by the generator that wrote it.
-- **Chords.** These are drawn from eight common loops until checkpoint (b) is built.
+- **Chords without a chosen harmony.** If you skip checkpoint (b), the melody search draws from eight common loops.
+- **The harmony model.** It is a first-order chord model over the loops Window 28 lists, not the spec's corpus-trained model, so the expectation medians are this model's own. The total budget counts each section's design once (repeats are not recharged), plus melodic and rhythmic events of 2 DU or more. One-DU melodic and rhythmic moves count only against the per-moment ceiling. This is the app's reading of 19.9.
 - **Meditative songs.** Table A has no Meditative row, so these are read against W-contemplative.
 - **Line lengths.** A line gets more bars when its syllables would crowd the type's density ceiling.
 
 ## What comes next
 
-This is stage 2: the session through to a locked lyric and a chosen melody. Still to come:
+This is stage 3: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map. Still to come:
 
-- (b) the harmonic skeleton and the departure-unit ledger;
 - (e) the production notes;
 - the floor on the finished song (Table G);
 - the lead sheet, the Nashville chart, the songbook and the demo.

@@ -7,6 +7,7 @@ import { QUESTIONS, scoreTriage, TYPES, typeLabel, typeShort } from "./engine/tr
 import * as P from "./prompts.js";
 import * as Mel from "./engine/melody.js";
 import * as Audio from "./audio.js";
+import * as Harm from "./engine/harmony.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -96,9 +97,9 @@ function logChoice(s, entry) {
   s.log.push({ ...entry, at: new Date().toISOString() });
 }
 
-const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", lyric: "(c) Lyric skeleton", melody: "(d) Melody", done: "Completion" };
-const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "lyric", "melody", "done"];
-const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "lyric", "melody", "done"];
+const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", harmony: "(b) Harmony", lyric: "(c) Lyric skeleton", melody: "(d) Melody", done: "Completion" };
+const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "harmony", "lyric", "melody", "done"];
+const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "harmony", "lyric", "melody", "done"];
 
 // ---------- Claude helpers ----------
 function claudeReady() { return Boolean(cap.sample); }
@@ -146,7 +147,9 @@ function manifest(s, result) {
   const cp = CHECKPOINTS[s.step] || s.step;
   const typeTxt = s.type ? typeShort(s.type) : "type not set";
   const floors = result ? result.summary.floors : null;
-  const head = `[${typeTxt} · DU: opens at (b), harmony · ${cp} · ${s.lastRule || "no rule checked yet"}]`;
+  const bud = s.type ? Harm.budgetFor(s.type) : null;
+  const du = s.melodyMap ? `DU ${s.melodyMap.songTotal}/${bud.total} · hook ${s.melodyMap.hookPeak}/${bud.ceiling}` : s.harmony ? `DU ${s.harmony.total}/${bud.total} (harmony) · ceiling ${bud.ceiling}` : bud ? `DU 0/${bud.total} · opens at (b)` : "DU: type not set";
+  const head = `[${typeTxt} · ${du} · ${cp} · ${s.lastRule || "no rule checked yet"}]`;
   const items = [];
   if (s.q0) items.push(["Q0", s.q0]);
   if (s.tension && s.tension.statement) items.push(["Tension", s.tension.statement]);
@@ -155,6 +158,7 @@ function manifest(s, result) {
   if (c.voice || c.key) items.push(["Key and voice", [c.key, c.voice].filter(Boolean).join(", ")]);
   if (c.bpm) items.push(["Tempo", `${c.bpm} BPM ${c.feel || ""}`.trim()]);
   if (c.form) items.push(["Form", c.form]);
+  if (s.harmony) items.push(["Harmony", Object.entries(s.harmony.skel).map(([k, v]) => `${k} ${v.join(" ")}`).join("; ")]);
   items.push(["Never-say", c.neverSay ? c.neverSay : "not asked yet"]);
   (s.constraints || []).forEach((k) => items.push(["Kept on purpose", k]));
   if (floors !== null) items.push(["Open", floors ? `${floors} floor reading${floors > 1 ? "s" : ""} to decide` : "no floor readings open"]);
@@ -228,7 +232,7 @@ function viewSong() {
   const m = manifest(s, result);
   const body = {
     seed: stepSeed, paste: stepPaste, q0: stepQ0, triage: stepTriage, confirm: stepConfirm,
-    intake: stepIntake, tension: stepTension, contract: stepContract, lyric: stepLyric, melody: stepMelody, done: stepDone,
+    intake: stepIntake, tension: stepTension, contract: stepContract, harmony: stepHarmony, lyric: stepLyric, melody: stepMelody, done: stepDone,
   }[s.step];
   return h("main", { class: "wrap" },
     h("div", { class: "topbar" },
@@ -463,8 +467,7 @@ function stepContract(s) {
     ui.error = null;
     s.contract = next;
     logChoice(s, { id: "Contract", question: "Required inputs (Protocol 0b)", answer: `title: ${next.title}; never-say: ${next.neverSay}; voice: ${next.voice}; tempo: ${next.bpm} ${next.feel}; key: ${next.key}; form: ${next.form}` });
-    s.step = "lyric"; save(); render();
-    if (!s.lyric && claudeReady()) draft(s);
+    s.step = "harmony"; save(); render(); window.scrollTo(0, 0);
   } },
     f("title", "Title", c.title, { required: true }),
     f("neverSay", "Never-say list", c.neverSay, {}, "Words or phrases this song must never use, separated by commas. Write 'none' to waive it."),
@@ -692,7 +695,8 @@ function songRecord(s) {
   if (s.melody) {
     out.push(""); out.push("## Melody (Module 27)");
     out.push(`Candidate ${s.melody.id}, rank ${s.melody.rank} of the search with seed ${s.melody.seed} (fingerprint ${s.melody.fingerprint}). Key ${s.melody.key}, voice ${s.melody.voice}, form ${s.melody.form}.`);
-    out.push(`Chords: verse ${s.melody.loops.verse.join("-")}, chorus ${s.melody.loops.hook.join("-")}.`);
+    out.push(`Chords: ${Object.entries(s.melody.loops).map(([k, v]) => `${k} ${v.join("-")}`).join("; ")}.`);
+    if (s.melodyMap) out.push(`Departure map: ${s.melodyMap.songTotal} of ${s.melodyMap.budget.total} DU in the song; the hook's busiest phrase ${s.melodyMap.hookPeak} of ${s.melodyMap.budget.ceiling}; the verse's ${s.melodyMap.versePeak}.`);
     const mm = s.melody.m; out.push(`Readings: composite ${mm.composite.toFixed(3)}; beta ${mm.beta === null ? "n/a" : mm.beta.toFixed(2)}; CMP ${mm.cmp.toFixed(2)}; memory ${mm.mh.toFixed(2)}; surprisal ${mm.ic.toFixed(2)} (${mm.bits.toFixed(2)} bits); fit ${mm.fit.toFixed(2)}.`);
   }
   if (s.constraints.length) { out.push(""); out.push("## Kept on purpose"); s.constraints.forEach((k) => out.push(`- ${k}`)); }
@@ -734,6 +738,116 @@ function stepDone(s) {
     ),
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
   );
+}
+
+// ---------- checkpoint (b): the harmonic skeleton and departure map ----------
+function harmonyKinds(s) {
+  const secs = s.lyric ? Mel.makeBrief(s, s.lyric).sections : null;
+  return Harm.formKinds(s.contract.form, secs);
+}
+const KIND_LABEL = { verse: "Verse", prechorus: "Pre-chorus", chorus: "Chorus", bridge: "Bridge" };
+
+function chordChips(loop, key, type, mode) {
+  return h("div", { class: "chords" }, loop.map((sym) => {
+    const cost = Harm.chordCost(sym, type, mode);
+    return h("span", { class: "chordchip" + (cost ? " du" + Math.min(3, cost) : ""), title: cost ? `${cost} DU` : "diatonic" },
+      h("b", { text: Harm.chordName(sym, key) }), h("small", { text: sym + (cost ? ` · ${cost} DU` : "") }));
+  }));
+}
+
+function playLoops(skel, key, bpm, beatsPerBar) {
+  const order = ["verse", "prechorus", "chorus"].filter((k) => skel[k]);
+  const chords = [];
+  let t = 0;
+  const barLen = beatsPerBar * 2;
+  order.forEach((k) => skel[k].forEach((sym) => { const c = Harm.parseChord(sym, key.mode); chords.push({ t, dur: barLen, roman: sym, root: c.root, tones: c.tones }); t += barLen; }));
+  Audio.play({ notes: [], chords, length: t }, { bpm, beatsPerBar, key });
+}
+
+function skeletonCard(s, c, i, rec, key, kinds, budget) {
+  const L = c.ledger;
+  const exp = c.expectation;
+  const facts = [
+    c.facts.loopChanges ? "The chorus changes the loop (83–95% of real songs)" : "The chorus keeps the verse loop (5–17% of real songs)",
+    c.facts.chorusOffTonic ? "The chorus starts off the tonic (57–59%)" : "The chorus starts on the tonic (41–43%)",
+    c.facts.bridgeDeparts ? "The bridge departs from both" : null,
+  ].filter(Boolean);
+  return h("section", { class: "card cand" + (i === rec ? " recd" : "") },
+    h("div", { class: "candhead" }, h("span", { class: "rank", text: String.fromCharCode(65 + i) }), h("span", { class: "eyebrow", text: `${L.total} of ${budget.total} DU · busiest phrase ${L.peak.du} of ${budget.ceiling}${i === rec ? " · Recommended" : ""}` })),
+    kinds.filter((k) => c.skel[k]).map((k) => h("div", { class: "secrow" }, h("p", { class: "label", text: `${KIND_LABEL[k]} · ${L.sections[k].du} DU` }), chordChips(c.skel[k], key, s.type, key.mode))),
+    c.spends.length ? h("p", { class: "fine", text: "Departures: " + c.spends.map((x) => `${x.note} in the ${KIND_LABEL[x.where].toLowerCase()}`).join("; ") }) : h("p", { class: "fine", text: "No harmonic departures: the carrier stays plain and leaves the budget to the melody and the words." }),
+    h("p", { class: "fine", text: `Chorus on its second pass: ${exp.rows.map((r) => `${r.chord} ${r.quad}`).join(", ")} (expectation ${exp.score.toFixed(2)})` }),
+    h("ul", { class: "mini" }, facts.map((f) => h("li", { text: f }))),
+    h("div", { class: "row wrap" },
+      h("button", { class: "btn small", onclick: () => playLoops(c.skel, key, s.contract.bpm || 80, s.contract.beatsPerBar || 4) }, "▶ Hear verse to chorus"),
+      h("button", { class: "btn small ghost", onclick: () => Audio.stop() }, "■ Stop"),
+      h("button", { class: "btn small primary", onclick: () => chooseHarmony(s, c.skel, "search", c, budget, i, rec) }, `Choose ${String.fromCharCode(65 + i)}`)),
+  );
+}
+
+function chooseHarmony(s, skel, source, cand, budget, i, rec) {
+  const key = Mel.parseKey(s.contract.key);
+  const L = Harm.harmonicLedger(skel, s.type, key.mode);
+  s.harmony = { skel, source, total: L.total, peak: L.peak.du, budget: { total: budget.total, ceiling: budget.ceiling }, key: key.name };
+  logChoice(s, { id: "Harmony", question: "Which harmonic skeleton? (checkpoint b)", options: ui.harm ? ui.harm.top.map((c) => Object.entries(c.skel).map(([k, v]) => `${k}: ${v.join(" ")}`).join("; ")) : [], recommended: ui.harm && ui.harm.top[rec || 0] ? "A" : null,
+    answer: `${source === "writer" ? "Writer's own chords" : "Option " + String.fromCharCode(65 + (i || 0))}: ${Object.entries(skel).map(([k, v]) => `${k} ${v.join(" ")}`).join("; ")} (${L.total}/${budget.total} DU, busiest phrase ${L.peak.du}/${budget.ceiling})` });
+  s.lastRule = "Window 19.9 budget, 19.10 discount, Window 28";
+  ui.search = null; // a new harmony means a new melody search
+  Audio.stop();
+  s.step = s.lyric && s.locked ? "melody" : "lyric";
+  save(); render(); window.scrollTo(0, 0);
+  if (s.step === "lyric" && !s.lyric && claudeReady()) draft(s);
+}
+
+function stepHarmony(s) {
+  const key = Mel.parseKey(s.contract.key);
+  const kinds = harmonyKinds(s);
+  const budget = Harm.budgetFor(s.type);
+  const intro = card("Checkpoint (b) · Harmonic skeleton and departure map", "Choose the chords the song stands on.",
+    `The carrier first: plain enough that the room locks in, so the departures register. One borrowed chord costs 1 departure unit (DU); a secondary dominant or deceptive cadence 2; a modulation 3. A ${budget.name} has ${budget.total} DU for the whole song and ${budget.ceiling} at any one moment, shared with the melody and rhythm.`,
+    h("dl", { class: "facts2" },
+      [["Key", key.name], ["Sections", kinds.map((k) => KIND_LABEL[k]).join(", ")], ["Budget", `${budget.total} DU, ${budget.ceiling} per moment${budget.note ? " (" + budget.note + ")" : ""}`]].map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])),
+    h("button", { class: "btn primary", onclick: () => {
+      const seed = (Mel.hashStr(s.id) + 7 + (s.harmRuns || 0)) >>> 0;
+      s.harmRuns = (s.harmRuns || 0) + 1;
+      ui.harm = Harm.searchSkeletons(s.type, key.mode, kinds, { n: 600, seed });
+      save(); render();
+    } }, ui.harm ? "Propose three more" : "Propose the harmony"),
+    s.harmony ? h("p", { class: "fine", text: `Chosen: ${Object.entries(s.harmony.skel).map(([k, v]) => `${KIND_LABEL[k] || k} ${v.join(" ")}`).join(" · ")} (${s.harmony.total}/${s.harmony.budget.total} DU)` }) : null,
+  );
+  const opts = ui.harm ? ui.harm.top.map((c, i) => skeletonCard(s, c, i, 0, key, kinds, budget)) : [];
+  // the writer's own chords, measured
+  const inputs = {};
+  const own = h("form", { class: "contract", onsubmit: (e) => {
+    e.preventDefault();
+    const skel = {}; const bad = [];
+    kinds.forEach((k) => { const p = Harm.parseLoop(inputs[k].value, key.mode); if (p.syms.length) skel[k] = p.syms; bad.push(...p.bad); });
+    if (bad.length) { ui.error = `These chords weren't recognised: ${bad.join(", ")}. Use Roman numerals like I V vi IV, bVII, V/V, I7.`; render(); return; }
+    if (!Object.keys(skel).length) return;
+    ui.error = null;
+    chooseHarmony(s, skel, "writer", null, budget);
+  } },
+    kinds.map((k) => { const inp = h("input", { id: "own-" + k, placeholder: key.mode === "minor" ? "i VI III VII" : "I V vi IV" }); inp.value = s.harmony && s.harmony.skel[k] ? s.harmony.skel[k].join(" ") : ""; inputs[k] = inp; return h("label", { class: "field", for: "own-" + k }, h("span", { text: KIND_LABEL[k] }), inp); }),
+    h("button", { class: "btn", type: "submit" }, "Use my chords"),
+  );
+  const ownCard = h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Or your own chords" }), h("p", { class: "help", text: "Roman numerals, one chord a bar: I V vi IV, bVII, iv, V/V, I7. Your chords are used unchanged and measured the same way." }), own);
+  return h("div", { class: "stack" }, intro, ...opts, ownCard,
+    h("button", { class: "link", onclick: () => { s.step = s.lyric && s.locked ? "melody" : "lyric"; save(); render(); } }, s.harmony ? "Keep the chosen harmony ›" : "Skip for now (the melody search will draw common loops) ›"));
+}
+
+// The departure map of a melody candidate on its chords.
+function mapFor(s, cand, brief) {
+  return Harm.departureMap(cand.sections, { type: s.type, key: brief.key, beatsPerBar: brief.beatsPerBar, voiceBreak: brief.voice.brk });
+}
+function mapView(map) {
+  const b = map.budget;
+  const verdict = map.over.length ? `${map.over.length} phrase${map.over.length > 1 ? "s go" : " goes"} past the ceiling of ${b.ceiling}: past the 1/f boundary there.`
+    : map.hookPeak >= b.ceiling - 1 ? `The hook reaches ${map.hookPeak} of ${b.ceiling}: the payload is deployed where it belongs.`
+    : `The hook spends ${map.hookPeak} of ${b.ceiling}. A song that never nears its ceiling hasn't deployed its payload.`;
+  return h("div", { class: "dumap" },
+    h("p", { class: "label", text: `Departure map · ${map.songTotal} of ${b.total} DU in the song · hook ${map.hookPeak}/${b.ceiling} · verse ${map.versePeak}/${b.ceiling}` }),
+    h("div", { class: "dubars" }, map.rows.map((r) => h("span", { class: "dub" + (r.over ? " over" : r.kind === "chorus" ? " hook" : ""), style: `height:${8 + r.total * 10}px`, title: `${r.section} line ${r.line}: harmony ${r.harm}, melody ${r.mel}, rhythm ${r.rhy}${r.why.length ? " (" + r.why.join(", ") + ")" : ""}` }))),
+    h("p", { class: "fine", text: verdict }));
 }
 
 // ---------- checkpoint (d): the melody search ----------
@@ -803,6 +917,8 @@ function chooseMelody(s, cand, brief, reason) {
     loops: cand.plan.loop, form: cand.plan.form.join(" "), key: brief.key.name, voice: brief.voiceName,
     notes: tl.notes.map((n) => [n.t, n.dur, n.p, n.syl]), chords: tl.chords.map((c) => [c.t, c.dur, c.roman]), length: tl.length,
   };
+  const mp = mapFor(s, cand, brief);
+  s.melodyMap = { songTotal: mp.songTotal, hookPeak: mp.hookPeak, versePeak: mp.versePeak, over: mp.over.length, budget: { total: mp.budget.total, ceiling: mp.budget.ceiling } };
   logChoice(s, { id: "Melody", question: "Which melody?", options: ui.search.result.top.map((c) => `#${c.rank} (candidate ${c.id})`), recommended: "#1", answer: `#${cand.rank} (candidate ${cand.id})${reason ? " because: " + reason : ""}` });
   Audio.stop();
   s.step = "done"; save(); render(); window.scrollTo(0, 0); completion(s);
@@ -821,7 +937,9 @@ function stepMelody(s) {
     h("dl", { class: "facts2" }, facts.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])),
     S && S.running ? h("div", { class: "progress" }, h("div", { class: "track" }, h("div", { id: "searchbar", class: "fill", style: `width:${(S.done / S.n) * 100}%` })), h("p", { id: "searchlabel", class: "fine", text: `${S.done} of ${S.n} built` }))
       : h("button", { class: "btn primary", onclick: () => runSearch(s) }, S && S.result ? "Run it again with a new seed" : s.melody ? "Search again" : "Run the search"),
-    h("p", { class: "fine", text: "Until the harmony stage is built, the chords come from eight common loops spread across the candidates. Two parts of the spec's ranking are not here yet: realness (it needs the reference set of real choruses) and the harmonic-expectation term. The rest of the weights are kept in proportion." }),
+    brief.harmony ? h("p", { class: "fine", text: `On your chosen harmony: ${Object.entries(brief.harmony).map(([k, v]) => `${k} ${v.join(" ")}`).join(" · ")}.` })
+      : h("p", { class: "fine" }, "No harmony chosen yet, so the chords come from eight common loops spread across the candidates. ", h("button", { class: "link", onclick: () => { s.step = "harmony"; save(); render(); } }, "Choose the harmony first ›")),
+    h("p", { class: "fine", text: "Two parts of the spec's ranking are not here yet: realness (it needs the reference set of real choruses) and the harmonic-expectation term. The rest of the weights are kept in proportion." }),
   );
   if (!S || !S.result) return h("div", { class: "stack" }, briefCard, s.melody ? h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Chosen melody" }), h("p", { text: `Candidate ${s.melody.id} (rank ${s.melody.rank}) from seed ${s.melody.seed}, fingerprint ${s.melody.fingerprint}.` }), h("button", { class: "btn", onclick: () => { s.step = "done"; save(); render(); } }, "Keep it and continue")) : null);
 
@@ -863,7 +981,8 @@ function stepMelody(s) {
         metric("Type fit", m.fit.toFixed(2), `verse ${m.verseContour}, chorus ${m.hookContour}`),
         metric("Lift", `${m.verseLift > 0 ? "+" : ""}${m.verseLift} st`, `chorus over verse; range ${m.range}`),
       ),
-      h("p", { class: "fine", text: `Chords: verse ${c.plan.loop.verse.join("–")}, chorus ${c.plan.loop.hook.join("–")} · form ${c.plan.form.join(" ")} · longest run on one note ${m.longestRun}` }),
+      mapView(mapFor(s, c, S.brief)),
+      h("p", { class: "fine", text: `Chords: ${Object.entries(c.plan.loop).map(([k, v]) => `${k} ${v.join("–")}`).join(" · ")} · form ${c.plan.form.join(" ")} · longest run on one note ${m.longestRun}` }),
       c.rank > 1 ? reason : null,
       h("button", { class: "btn primary", onclick: () => {
         const why = c.rank > 1 ? reason.value.trim() : "";

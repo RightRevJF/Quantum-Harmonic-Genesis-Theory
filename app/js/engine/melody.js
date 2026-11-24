@@ -11,21 +11,9 @@
 import { lookup, isVowelPhone } from "./lexicon.js";
 import { parseSheet, tokenize } from "./lyric.js";
 
-// ---------- seeded random ----------
-export function rng(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-export function hashStr(s) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
+import { rng, hashStr } from "./melody-rng.js";
+import { parseChord } from "./harmony.js";
+export { rng, hashStr };
 const pick = (r, arr) => arr[Math.floor(r() * arr.length)];
 
 // ---------- voice rows (Rule 11.2); break = ceiling minus a whole step ----------
@@ -112,21 +100,11 @@ export function parseKey(text = "") {
   return { tonic, mode, name: `${names[tonic]} ${mode}` };
 }
 const SCALE = { major: [0, 2, 4, 5, 7, 9, 11], minor: [0, 2, 3, 5, 7, 8, 10] };
-const ROMAN = { I: 0, II: 1, III: 2, IV: 3, V: 4, VI: 5, VII: 6 };
 
 // Chord tones (pitch classes relative to the tonic) of a Roman numeral in the key.
 export function chordTones(roman, mode) {
-  const flat = roman.startsWith("b");
-  const core = roman.replace(/^b/, "").replace(/[^ivIV]/g, "");
-  const deg = ROMAN[core.toUpperCase()];
-  const sc = SCALE[mode];
-  let root = sc[deg] - (flat ? 1 : 0);
-  if (flat) root = (SCALE.major[deg] - 1 + 12) % 12;
-  const minor = core === core.toLowerCase();
-  let third = (root + (minor ? 3 : 4)) % 12;
-  let fifth = (root + 7) % 12;
-  if (/°|dim/.test(roman)) fifth = (root + 6) % 12;
-  return { root: ((root % 12) + 12) % 12, tones: [((root % 12) + 12) % 12, third, fifth] };
+  const c = parseChord(roman, mode) || parseChord(mode === "minor" ? "i" : "I", mode);
+  return { root: c.root, tones: c.tones };
 }
 
 // Table F stand-in: common loops (POP909 and McGill pooled in the spec; hand-listed here).
@@ -297,7 +275,7 @@ function buildSection(sec, plan, r, brief, ref) {
   const cands = scalePitches(key, voice.floor, top);
   const barLen = brief.beatsPerBar * 2;
   const slot = brief.barsPerLine * barLen;
-  const section = { name: sec.name, kind: sec.kind, barLen, loop: plan.loop[role === "hook" ? "hook" : "verse"], lines: [], notes: [] };
+  const section = { name: sec.name, kind: sec.kind, barLen, loop: loopFor(plan.loop, sec.kind), lines: [], notes: [] };
   let t = 0;
   let prev = null, prev2 = null, run = 1;
   const form = plan.form;
@@ -380,6 +358,11 @@ function buildSection(sec, plan, r, brief, ref) {
 
 const FORMS = [["a", "a'", "b", "c"], ["a", "b", "a'", "c"], ["a", "a'", "b", "a'"], ["a", "b", "a", "b'"], ["a", "a'", "b", "b'"]];
 
+// The section's loop: the chosen harmony's, or the nearest kind's.
+export function loopFor(loops, kind) {
+  return loops[kind] || (kind === "chorus" ? loops.hook : null) || (kind === "prechorus" || kind === "bridge" ? loops.verse : null) || loops.verse || loops.chorus;
+}
+
 export function makeBrief(song, lyricText) {
   const c = song.contract || {};
   const key = parseKey(c.key);
@@ -395,13 +378,17 @@ export function makeBrief(song, lyricText) {
     sync: LEAD_SHEET_TYPES.has(base) ? row.sync : POP_BAND.sync,
     calibration: calibration(song.type, key.mode),
     tableARowNote: base === "M" ? "Table A has no Meditative row; read against W-contemplative." : "",
+    harmony: song.harmony && song.harmony.skel ? song.harmony.skel : null,
   };
 }
 
 export function buildCandidate(brief, seed, idx) {
   const r = rng(seed + idx * 7919);
   const loops = LOOPS[brief.key.mode];
-  const plan = { loop: loops[idx % 8], loopIndex: idx % 8, form: pick(r, FORMS), leapRule: r() < 0.5 };
+  const L = loops[idx % 8];
+  // The writer's chosen harmony is used unchanged; without one the candidates spread across eight loop pairs.
+  const loop = brief.harmony ? { ...brief.harmony } : { verse: L.verse, chorus: L.hook };
+  const plan = { loop, loopIndex: brief.harmony ? null : idx % 8, form: pick(r, FORMS), leapRule: r() < 0.5 };
   const built = new Map();
   const out = [];
   const lastChorus = brief.sections.map((s) => s.kind).lastIndexOf("chorus");
