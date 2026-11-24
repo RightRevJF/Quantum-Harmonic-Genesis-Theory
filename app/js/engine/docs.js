@@ -172,27 +172,35 @@ function splitDur(d) {
   return out;
 }
 
-function hyphenate(word, n) {
+export function hyphenate(word, n) {
   if (n <= 1) return [word];
-  const w = word.replace(/'/g, "");
+  const w = word.replace(/'/g, "’");
   const groups = [];
   const rx = /[aeiouy]+/gi; let m;
   while ((m = rx.exec(w))) groups.push([m.index, m.index + m[0].length]);
+  // too few vowel groups for the syllables (ra-di-o): split a group between its vowels
+  for (let g = 0; groups.length < n && g < groups.length; g++) {
+    const [a, b] = groups[g];
+    if (b - a >= 2 && !/^(ee|oo|ea|ai|ay|ou|ow|oa|ie|ei|ey|oy|oi|au|aw|ue)$/i.test(w.slice(a, b))) { groups.splice(g, 1, [a, a + 1], [a + 1, b]); g--; }
+  }
+  for (let g = 0; groups.length < n && g < groups.length; g++) {
+    const [a, b] = groups[g];
+    if (b - a >= 2) { groups.splice(g, 1, [a, a + 1], [a + 1, b]); g--; }
+  }
   const cuts = [];
   for (let g = 0; g + 1 < groups.length && cuts.length < n - 1; g++) {
     const gapStart = groups[g][1], gapEnd = groups[g + 1][0];
     const gap = w.slice(gapStart, gapEnd).toLowerCase();
     // keep digraphs together (fa-ther, wash-ing); otherwise split a cluster after its first consonant
-    const di = /^(th|sh|ch|ph|wh|gh|ck|ng)$/.test(gap) ? 0 : /^(th|sh|ch|ph|wh)/.test(gap) ? 0 : 1;
-    const cut = gapEnd - gapStart >= 2 ? gapStart + di : gapStart;
-    cuts.push(Math.max(1, cut));
+    const di = /^(th|sh|ch|ph|wh|gh|ck|ng)/.test(gap) ? 0 : 1;
+    cuts.push(gapEnd - gapStart >= 2 ? gapStart + di : gapStart);
   }
   while (cuts.length < n - 1) cuts.push(Math.round((w.length * (cuts.length + 1)) / n));
   const parts = [];
   let prev = 0;
-  cuts.sort((a, b) => a - b).forEach((c) => { parts.push(w.slice(prev, c)); prev = c; });
+  cuts.sort((a, b) => a - b).forEach((c) => { const cc = Math.max(c, prev + 1); parts.push(w.slice(prev, cc)); prev = cc; });
   parts.push(w.slice(prev));
-  return parts.map((p) => p || "_");
+  return parts.map((p) => (p || "_").replace(/’/g, "'"));
 }
 
 // Turn timed events into ABC bars for one voice. ev: {t, dur, ps:[] | rest, slash, chord, syl, word, part, of, ann}

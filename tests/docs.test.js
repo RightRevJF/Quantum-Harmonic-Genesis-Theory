@@ -68,3 +68,27 @@ test("bars in every voice add up to the meter", async () => {
     perBar.forEach((d, bar) => assert.equal(d, rec.barLen, `${part} bar ${bar + 1}`));
   }
 });
+
+test("LilyPond: Module 11 rules, and it engraves when LilyPond is installed", async (t) => {
+  const { allLy } = await import("../app/js/engine/lily.js");
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const b = M.makeBrief(song, LYRIC);
+  const res = await M.search(b, { n: 200, seed: 5 });
+  const rec = D.buildRecord(res.top[0], b, song);
+  const ly = allLy(rec);
+  assert.match(ly, /melody = \\relative c' \{/, "11.1: vocal melody in relative c'");
+  assert.match(ly, /\\clef "treble_8"/, "male voice on treble_8");
+  assert.match(ly, /\\key es \\major/);
+  assert.match(ly, /\\compressMMRests/);
+  assert.equal((ly.match(/\{/g) || []).length, (ly.match(/\}/g) || []).length, "balanced braces");
+  let has = true;
+  try { execFileSync("lilypond", ["--version"], { stdio: "ignore" }); } catch { has = false; }
+  if (!has) { t.skip("LilyPond not installed"); return; }
+  const dir = mkdtempSync(`${tmpdir()}/ly-`);
+  writeFileSync(`${dir}/song.ly`, ly);
+  execFileSync("lilypond", ["-s", "-o", dir, `${dir}/song.ly`], { stdio: "ignore" });
+  const pdfs = readdirSync(dir).filter((f) => f.endsWith(".pdf")).sort();
+  assert.deepEqual(pdfs, ["song-bass.pdf", "song-drums.pdf", "song-guitar.pdf", "song-keys.pdf", "song-lead-sheet.pdf", "song-score.pdf", "song-voice.pdf"]);
+});

@@ -11,6 +11,7 @@ import * as Harm from "./engine/harmony.js";
 import * as Floor from "./engine/floor.js";
 import * as Docs from "./engine/docs.js";
 import * as Pdf from "./pdf.js";
+import * as Lily from "./engine/lily.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -938,6 +939,9 @@ function docsCard(s) {
       btn("lead sheet", (r, prog) => Pdf.leadSheetPdf(r, { onProgress: prog }), `${base} - lead sheet.pdf`),
       btn("Nashville chart", (r) => Pdf.chartPdf(r), `${base} - Nashville chart.pdf`),
       btn("songbook", (r) => Pdf.songbookPdf(r, s), `${base} - songbook.pdf`)),
+    h("p", { class: "label", text: "Print quality (LilyPond)" }),
+    h("p", { class: "fine", text: "One LilyPond file holds the lead sheet, the full score and every part, engraved to the spec's notation rules (Module 11). Open it with LilyPond 2.24 or later (free, lilypond.org), or hand it to the engine's pipeline, and it writes each PDF plus a MIDI file." }),
+    h("div", { class: "row wrap" }, btn("LilyPond file", (r) => new TextEncoder().encode(Lily.allLy(r)).buffer, `${base} - lead sheet, score and parts.ly`)),
   );
 }
 
