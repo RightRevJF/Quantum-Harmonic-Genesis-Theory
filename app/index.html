@@ -178,6 +178,17 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .dub { flex: 0 0 10px; background: var(--accent-soft); border-radius: 2px 2px 0 0; }
 .dub.hook { background: var(--accent); }
 .dub.over { background: var(--floor); }
+.floorchip { font: 600 0.82rem var(--mono); padding: 8px 10px; border-radius: 8px; }
+.floorchip.ok { background: var(--accent-soft); color: var(--ok); }
+.floorchip.bad { background: var(--floor-soft); color: var(--floor); }
+.floorview { display: grid; gap: 14px; }
+.fgroup { display: grid; gap: 6px; }
+.fchecks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.fcheck { display: grid; grid-template-columns: 92px 1fr; gap: 2px 10px; padding: 6px 0; border-bottom: 1px dotted var(--line); }
+.fcheck > small { grid-column: 2; }
+.fstate { font: 600 0.68rem/1.6 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; grid-row: span 3; }
+.fcheck.pass .fstate { color: var(--ok); } .fcheck.info .fstate { color: var(--info); } .fcheck.flag .fstate { color: var(--flag); } .fcheck.floor .fstate { color: var(--floor); }
+.fname { min-width: 0; overflow-wrap: anywhere; }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

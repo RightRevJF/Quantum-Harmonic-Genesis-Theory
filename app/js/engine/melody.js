@@ -154,44 +154,59 @@ function syllabify(line) {
 // ---------- rhythm from the words ----------
 // Returns [{syl, onset (eighths from line start), dur (eighths)}] in a slot of `slot` eighths.
 function lineRhythm(syls, slot, r, opts = {}) {
+  // Principle 25 and Window 30, as a small dynamic program: choose each syllable's length
+  // (1-3 eighths; the title's held syllable 3-4) and a pickup so stressed syllables land on the
+  // strong beats and unstressed ones stay off them, with a little noise so candidates differ.
   const breath = 2;
   const avail = slot - breath;
-  const tryOnce = () => {
-    let pos = syls.length + 2 <= avail ? pick(r, [0, 0, 1, 2]) : 0;
-    const notes = [];
-    for (let i = 0; i < syls.length; i++) {
-      const s = syls[i];
-      if (s.stress > 0 && pos % 2 === 1 && notes.length && r() < 0.8 && (avail - pos) > (syls.length - i)) {
-        notes[notes.length - 1].dur += 1; pos += 1; // pull the stressed syllable onto the beat
-      }
-      let dur = 1;
-      if (s.stress > 0 && r() < 0.35) dur = 2;
-      if (i === opts.money) dur = pick(r, [3, 4]);
-      notes.push({ syl: s, onset: pos, dur });
-      pos += dur;
-    }
-    // squeeze if too long
-    let over = pos - avail;
-    for (let i = notes.length - 1; i >= 0 && over > 0; i--) {
-      if (notes[i].dur > 1) { const cut = Math.min(over, notes[i].dur - 1); notes[i].dur -= cut; over -= cut; for (let j = i + 1; j < notes.length; j++) notes[j].onset -= cut; }
-    }
-    if (over > 0) return null;
-    // the last syllable takes the rest of the line before the breath
-    const last = notes[notes.length - 1];
-    last.dur = Math.max(last.dur, avail - last.onset);
-    return notes;
+  const bpb = opts.beatsPerBar || 4;
+  const strongEvery = bpb === 4 ? 4 : bpb * 2;
+  const barLen = bpb * 2;
+  const n = syls.length;
+  if (n === 0 || n > avail) return null;
+  // one noise stream per section, so lines of the same shape get the same rhythm (cells return)
+  const rn = opts.noiseSeed !== undefined ? rng(opts.noiseSeed) : r;
+  const noise = syls.map(() => [rn() * 0.5, rn() * 0.5, rn() * 0.5, rn() * 0.5]);
+  const startNoise = [0, 1, 2, 3].map(() => rn() * 0.6);
+  const gain = (i, pos) => {
+    const st = syls[i].stress > 0;
+    let g = 0;
+    if (pos % strongEvery === 0) g += st ? 1.0 : -0.8;
+    else if (pos % 2 === 0) g += st ? 0.35 : 0;
+    else g += st ? -0.3 : 0.05;
+    if (i === opts.money && opts.placement) g += opts.placement.includes((pos % barLen) / 2) ? 1.5 : -0.5;
+    return g;
   };
-  for (let k = 0; k < 12; k++) {
-    const n = tryOnce();
-    if (!n) continue;
-    if (opts.placement && opts.money !== undefined && opts.money >= 0) {
-      const m = n[opts.money];
-      const beatInBar = ((m.onset % (opts.beatsPerBar * 2)) / 2);
-      if (!opts.placement.includes(beatInBar) && k < 11) continue;
-    }
-    return n;
+  const durs = (i) => (i === opts.money ? [3, 4] : syls[i].stress > 0 ? [1, 2, 3] : [1, 2]);
+  // best[i][pos] = best score placing syllables i.. starting at pos
+  const memo = new Map();
+  const solve = (i, pos) => {
+    if (i === n) return { score: 0, plan: [] };
+    const key = i * 64 + pos;
+    if (memo.has(key)) return memo.get(key);
+    let best = { score: -Infinity, plan: null };
+    durs(i).forEach((d, di) => {
+      const end = pos + d;
+      if (end + (n - i - 1) > avail) return;
+      const rest = solve(i + 1, end);
+      if (!rest.plan) return;
+      const sc = gain(i, pos) + noise[i][di] + rest.score - (d === 3 && i !== opts.money ? 0.25 : 0);
+      if (sc > best.score) best = { score: sc, plan: [d, ...rest.plan] };
+    });
+    memo.set(key, best);
+    return best;
+  };
+  let pick0 = null;
+  for (let s0 = 0; s0 < Math.min(4, avail - n + 1); s0++) {
+    const res = solve(0, s0);
+    if (res.plan && (!pick0 || res.score + startNoise[s0] > pick0.score)) pick0 = { score: res.score + startNoise[s0], s0, plan: res.plan };
   }
-  return null;
+  if (!pick0) return null;
+  let pos = pick0.s0;
+  const notes = syls.map((syl, i) => { const nn = { syl, onset: pos, dur: pick0.plan[i] }; pos += pick0.plan[i]; return nn; });
+  const last = notes[notes.length - 1];
+  last.dur = Math.max(last.dur, avail - last.onset);
+  return notes;
 }
 
 // ---------- pitch generation ----------
@@ -278,6 +293,7 @@ function buildSection(sec, plan, r, brief, ref) {
   const section = { name: sec.name, kind: sec.kind, barLen, loop: loopFor(plan.loop, sec.kind), lines: [], notes: [] };
   let t = 0;
   let prev = null, prev2 = null, run = 1;
+  const rhythmSeed = Math.floor(r() * 4294967295);
   const form = plan.form;
   const titleNorm = brief.titleNorm;
   sec.lines.forEach((ln, li) => {
@@ -301,7 +317,7 @@ function buildSection(sec, plan, r, brief, ref) {
       const stressed = idx.filter((i) => syls[i].stress > 0);
       money = stressed.length ? stressed[stressed.length - 1] : idx[idx.length - 1];
     }
-    const rh = lineRhythm(syls, lslot, r, { money: isTitle ? money : -1, placement: isTitle ? row.placement : null, beatsPerBar: brief.beatsPerBar });
+    const rh = lineRhythm(syls, lslot, r, { money: isTitle ? money : -1, placement: isTitle ? row.placement : null, beatsPerBar: brief.beatsPerBar, noiseSeed: rhythmSeed });
     if (!rh) { section.unbuildable = true; return; }
     const letter = form[li % form.length];
     const refLine = ref && ref.lines[li] ? ref.lines[li] : section.lines.find((x) => x.letter === letter.replace("'", ""));

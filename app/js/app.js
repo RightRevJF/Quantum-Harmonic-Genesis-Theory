@@ -8,6 +8,7 @@ import * as P from "./prompts.js";
 import * as Mel from "./engine/melody.js";
 import * as Audio from "./audio.js";
 import * as Harm from "./engine/harmony.js";
+import * as Floor from "./engine/floor.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -699,6 +700,11 @@ function songRecord(s) {
     if (s.melodyMap) out.push(`Departure map: ${s.melodyMap.songTotal} of ${s.melodyMap.budget.total} DU in the song; the hook's busiest phrase ${s.melodyMap.hookPeak} of ${s.melodyMap.budget.ceiling}; the verse's ${s.melodyMap.versePeak}.`);
     const mm = s.melody.m; out.push(`Readings: composite ${mm.composite.toFixed(3)}; beta ${mm.beta === null ? "n/a" : mm.beta.toFixed(2)}; CMP ${mm.cmp.toFixed(2)}; memory ${mm.mh.toFixed(2)}; surprisal ${mm.ic.toFixed(2)} (${mm.bits.toFixed(2)} bits); fit ${mm.fit.toFixed(2)}.`);
   }
+  const fl = s.melody ? songFloor(s) : null;
+  if (fl && !fl.stale) {
+    out.push(""); out.push(`## The floor on the finished song (Table G): ${fl.finished ? "clear" : "under the floor"}`);
+    fl.checks.forEach((c) => out.push(`- [${c.level}] ${c.group}, ${c.name}: ${c.value} (${c.band})${c.where ? " at " + c.where : ""}`));
+  }
   if (s.constraints.length) { out.push(""); out.push("## Kept on purpose"); s.constraints.forEach((k) => out.push(`- ${k}`)); }
   return out.join("\n");
 }
@@ -731,9 +737,10 @@ function stepDone(s) {
       h("div", { class: "row wrap" }, saveBtn, copyBtn,
         h("button", { class: "btn ghost", onclick: () => { s.locked = false; s.step = "lyric"; logChoice(s, { id: "Unlock", question: "Unlock the lyric", answer: "Unlocked" }); save(); render(); } }, "Unlock and keep writing")),
     ),
+    floorCard(s),
     h("section", { class: "card" },
       h("p", { class: "eyebrow", text: "Next in the engine" }),
-      h("p", { text: "Checkpoints (b) and (e) come next: the harmonic skeleton with the departure budget, and the production notes. Then the floor on the finished song (words against the melody, breath, cadence), the lead sheet, chart, songbook and demo." }),
+      h("p", { text: "Checkpoint (e) comes next: the production notes. Then the lead sheet, chart, songbook and demo." }),
       s.melody ? h("button", { class: "link", onclick: () => { s.step = "melody"; save(); render(); } }, "‹ Back to the melody search") : null,
     ),
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
@@ -850,6 +857,43 @@ function mapView(map) {
     h("p", { class: "fine", text: verdict }));
 }
 
+// ---------- the floor on the finished song (Table G) ----------
+function pickedCandidate(s) {
+  if (!s.melody || !s.lyric) return null;
+  const brief = Mel.makeBrief(s, s.lyric);
+  const cand = Mel.rebuild(brief, s.melody.seed, s.melody.id);
+  const ps = cand.sections.flatMap((x) => x.notes.map((n) => n.p));
+  const stored = s.melody.notes.map((n) => n[2]);
+  const same = ps.length === stored.length && ps.every((p, i) => p === stored[i]);
+  return { cand, brief, same };
+}
+function songFloor(s) {
+  const pc = pickedCandidate(s);
+  if (!pc || !pc.same) return pc ? { stale: true } : null;
+  return Floor.floorReport(pc.cand, pc.brief, analyzeLyric(s.lyric, lyricOptions(s)));
+}
+const FLOOR_LEVEL = { floor: "Under the floor", flag: "Flag", info: "Report", pass: "Clear" };
+function floorView(f) {
+  const groups = [...new Set(f.checks.map((c) => c.group))];
+  return h("div", { class: "floorview" }, groups.map((g) => h("div", { class: "fgroup" },
+    h("p", { class: "label", text: g }),
+    h("ul", { class: "fchecks" }, f.checks.filter((c) => c.group === g).map((c) => h("li", { class: "fcheck " + c.level },
+      h("span", { class: "fstate", text: FLOOR_LEVEL[c.level] }),
+      h("span", { class: "fname" }, h("b", { text: c.name }), h("span", { text: `: ${c.value}` })),
+      h("small", { text: c.band + (c.where ? ` · ${c.where}` : "") + (c.note ? ` · ${c.note}` : "") }),
+      c.fix && (c.level === "floor" || c.level === "flag") ? h("small", { class: "ffix", text: c.fix }) : null))))));
+}
+function floorCard(s) {
+  const f = songFloor(s);
+  if (!f) return null;
+  if (f.stale) return h("section", { class: "card" }, h("p", { class: "eyebrow", text: "The floor on the finished song" }), h("p", { class: "alert", text: "The lyric or the chords changed after the melody was chosen, so the melody no longer fits them. Run the melody search again." }), h("button", { class: "btn", onclick: () => { s.step = "melody"; save(); render(); } }, "Back to the melody search"));
+  return h("section", { class: "card" },
+    h("p", { class: "eyebrow", text: "The floor on the finished song · Table G" }),
+    h("h2", { class: "q", text: f.finished ? "The song clears the floor." : "The song is under the floor." }),
+    h("p", { class: "help", text: f.finished ? "Your words sit on the melody the way real songs do, and the singer can breathe. Everything else below is information against real-song bands." : "A song under the alignment or breath floor isn't finished. The fix is usually small: move a syllable, add a rest. Search again or pick another melody." }),
+    floorView(f));
+}
+
 // ---------- checkpoint (d): the melody search ----------
 const SVGNS = "http://www.w3.org/2000/svg";
 function svg(tag, attrs = {}, ...kids) {
@@ -921,6 +965,7 @@ function chooseMelody(s, cand, brief, reason) {
   s.melodyMap = { songTotal: mp.songTotal, hookPeak: mp.hookPeak, versePeak: mp.versePeak, over: mp.over.length, budget: { total: mp.budget.total, ceiling: mp.budget.ceiling } };
   logChoice(s, { id: "Melody", question: "Which melody?", options: ui.search.result.top.map((c) => `#${c.rank} (candidate ${c.id})`), recommended: "#1", answer: `#${cand.rank} (candidate ${cand.id})${reason ? " because: " + reason : ""}` });
   Audio.stop();
+  ui.error = null;
   s.step = "done"; save(); render(); window.scrollTo(0, 0); completion(s);
 }
 
@@ -981,6 +1026,8 @@ function stepMelody(s) {
         metric("Type fit", m.fit.toFixed(2), `verse ${m.verseContour}, chorus ${m.hookContour}`),
         metric("Lift", `${m.verseLift > 0 ? "+" : ""}${m.verseLift} st`, `chorus over verse; range ${m.range}`),
       ),
+      (() => { const f = Floor.floorReport(c, S.brief, analyzeLyric(s.lyric, lyricOptions(s))); const bad = f.checks.filter((x) => x.level === "floor").map((x) => x.name.toLowerCase());
+        return h("p", { class: "floorchip " + (f.finished ? "ok" : "bad"), text: f.finished ? `Finished-song floor: clear (${f.flags} flag${f.flags === 1 ? "" : "s"})` : `Under the floor: ${bad.join("; ")}` }); })(),
       mapView(mapFor(s, c, S.brief)),
       h("p", { class: "fine", text: `Chords: ${Object.entries(c.plan.loop).map(([k, v]) => `${k} ${v.join("–")}`).join(" · ")} · form ${c.plan.form.join(" ")} · longest run on one note ${m.longestRun}` }),
       c.rank > 1 ? reason : null,

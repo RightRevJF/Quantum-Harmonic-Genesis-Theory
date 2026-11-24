@@ -23,6 +23,15 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
 
    - Each candidate shows its departure map: the harmonic, melodic and rhythmic DU of every phrase against the ceiling. The spec's practical test is that the hook reaches the ceiling and the verse stays below it.
 
+11. **The floor on the finished song (Table G):** this is measured on every melody candidate and on the chosen song. It covers:
+    - alignment (stressed syllables on strong beats, with a floor of 0.444);
+    - breath (phrases past the real 95th percentile are a floor);
+    - melisma, cadence, rhyme, tempo and form (first chorus at bar 13–28, two to four choruses, bridge against verse length);
+    - each line's speed on the melody's own notes (Window 36);
+    - tessitura fatigue over the whole form (11.13).
+
+    A song under the alignment or breath floor is marked not finished.
+
 The app also has a **lyric-first path** (Module 29): paste a finished lyric and the app measures it.
 
 ## What is measured (app/js/engine/lyric.js)
@@ -62,14 +71,15 @@ Tests: `npm test` (Node 20 or later).
 - **Chords without a chosen harmony.** If you skip checkpoint (b), the melody search draws from eight common loops.
 - **The harmony model.** It is a first-order chord model over the loops Window 28 lists, not the spec's corpus-trained model, so the expectation medians are this model's own. The total budget counts each section's design once (repeats are not recharged), plus melodic and rhythmic events of 2 DU or more. One-DU melodic and rhythmic moves count only against the per-moment ceiling. This is the app's reading of 19.9.
 - **Meditative songs.** Table A has no Meditative row, so these are read against W-contemplative.
+- **Rhythm.** Each line's rhythm is chosen by a small optimiser that puts stressed syllables on beats 1 and 3 and keeps unstressed ones off them. Lines of the same shape in a section share a rhythm. It aligns more tightly than real songs do (about 0.9 against the real median of 0.78).
+- **Melisma.** None is written yet: one note per syllable. The floor reports it.
 - **Line lengths.** A line gets more bars when its syllables would crowd the type's density ceiling.
 
 ## What comes next
 
-This is stage 3: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map. Still to come:
+This is stage 4: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map and the floor on the finished song. Still to come:
 
 - (e) the production notes;
-- the floor on the finished song (Table G);
 - the lead sheet, the Nashville chart, the songbook and the demo.
 
 Luthier © Jason Bryant 2026.
