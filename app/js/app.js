@@ -1,0 +1,730 @@
+// Luthier app: the session flow (seed -> Q0 -> triage -> type intake -> checkpoint (a)
+// -> contract -> lyric -> readings -> lock -> completion check), the manifest, and storage.
+
+import { loadLexicon } from "./engine/lexicon.js";
+import { analyzeLyric, measureCandidate, BANDS } from "./engine/lyric.js";
+import { QUESTIONS, scoreTriage, TYPES, typeLabel, typeShort } from "./engine/triage.js";
+import * as P from "./prompts.js";
+
+// ---------- tiny DOM helper (all text via textContent) ----------
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "text") el.textContent = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const $ = (sel) => document.querySelector(sel);
+
+// ---------- capabilities ----------
+const cap = { sample: null, db: null, user: null, downloads: null, uid: null };
+async function initCaps() {
+  if (!window.claude || !window.claude.use) return;
+  const [sample, db, user, downloads] = await Promise.all(["sample", "db", "user", "downloads"].map((n) => window.claude.use(n).catch(() => null)));
+  Object.assign(cap, { sample, db, user, downloads });
+  if (user && db) {
+    try { cap.uid = await user.id(); } catch { cap.uid = null; }
+  }
+  render();
+  if (cap.db && cap.uid) loadSongs();
+}
+
+// ---------- storage ----------
+const LS_KEY = "luthier.songs.v1";
+function lsRead() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch { return {}; } }
+function lsWrite(all) { try { localStorage.setItem(LS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ } }
+
+let songs = lsRead();
+let saveTimer = null;
+function save() {
+  const s = cur();
+  if (!s) return;
+  s.updatedAt = Date.now();
+  songs[s.id] = s;
+  lsWrite(songs);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    if (!cap.db || !cap.uid) return;
+    try { await cap.db.collection("data/users/" + cap.uid).doc(s.id).set({ json: JSON.stringify(s), updatedAt: s.updatedAt }); ui.saved = "Saved to your account"; }
+    catch (e) { ui.saved = "Saved on this device only"; }
+    renderStatus();
+  }, 800);
+}
+async function loadSongs() {
+  try {
+    const snap = await cap.db.collection("data/users/" + cap.uid).get();
+    snap.docs.forEach((d) => {
+      const data = d.data();
+      try {
+        const s = JSON.parse(data.json);
+        if (!songs[s.id] || (songs[s.id].updatedAt || 0) < s.updatedAt) songs[s.id] = s;
+      } catch { /* skip bad row */ }
+    });
+    lsWrite(songs);
+    render();
+  } catch { /* offline: local copy only */ }
+}
+
+// ---------- state ----------
+const ui = { view: "home", songId: null, busy: null, error: null, saved: "", coach: null, showManifest: false, abort: null, stream: "" };
+const cur = () => (ui.songId ? songs[ui.songId] : null);
+
+function newSong(mode) {
+  const id = "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  songs[id] = {
+    id, mode, createdAt: Date.now(), updatedAt: Date.now(),
+    step: mode === "lyric" ? "paste" : "seed",
+    seed: "", q0: "", triage: {}, type: null, intakeDone: false, pendingQ: null,
+    log: [], contract: { bpm: 80, beatsPerBar: 4, barsPerLine: 2, neverSay: "", writer: "" },
+    tension: null, drafts: [], lyric: "", locked: false, constraints: [], completion: null, lastRule: "",
+  };
+  ui.songId = id; ui.view = "song";
+  save(); render();
+}
+
+function logChoice(s, entry) {
+  s.log.push({ ...entry, at: new Date().toISOString() });
+}
+
+const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", lyric: "(c) Lyric skeleton", done: "Completion" };
+const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "lyric", "done"];
+const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "lyric", "done"];
+
+// ---------- Claude helpers ----------
+function claudeReady() { return Boolean(cap.sample); }
+function errCopy(e) {
+  const c = e && e.code;
+  if (c === "not_granted") return "Claude wasn't allowed for this page, so the writing help is off. You can still answer, write and measure.";
+  if (c === "rate_limited") return "Claude is busy right now. Wait a minute and try again.";
+  if (c === "aborted") return "Stopped.";
+  return "Claude couldn't answer that time. Try again, or keep going by hand.";
+}
+async function askJSON(prompt, label) {
+  ui.busy = label; ui.error = null; render();
+  try {
+    const out = await cap.sample.json(prompt, { modelTier: "default" });
+    return out;
+  } catch (e) { ui.error = errCopy(e); throw e; }
+  finally { ui.busy = null; render(); }
+}
+async function askText(prompt, label) {
+  ui.busy = label; ui.error = null; ui.stream = ""; ui.abort = new AbortController(); render();
+  try {
+    const { text } = await cap.sample(prompt, {
+      modelTier: "default", signal: ui.abort.signal, cache: false,
+      onText: ({ text }) => { ui.stream = text; const el = $("#stream"); if (el) el.textContent = text; },
+    });
+    return text;
+  } catch (e) { ui.error = errCopy(e); if (e && e.text) return e.text; throw e; }
+  finally { ui.busy = null; ui.abort = null; ui.stream = ""; render(); }
+}
+function cleanLyric(t) {
+  return t.replace(/^```[a-z]*\n?|```$/gm, "").replace(/[.,;:]+(\s*>?)\s*$/gm, "$1").trim();
+}
+
+// Fallback intake when Claude is unavailable: Module 10.1's lyric questions.
+const FALLBACK_INTAKE = [
+  { id: "Q2", question: "Describe the before in one physical image: something you could touch, smell, or see.", why: "Pole A, the wrong state" },
+  { id: "Q3", question: "Now the after. One physical image for who they're becoming.", why: "Pole B, the becoming" },
+  { id: "Q4", question: "What breaks it open? The single moment, event, or person.", why: "The bridge's rupture event" },
+  { id: "Q7", question: "In the final chorus, everything inverts. Who sings it and what do they now know?", why: "The inversion" },
+  { id: "Q8", question: "One word or phrase that has to live in the chorus.", why: "The convergence word" },
+];
+
+// ---------- the manifest (Execution Protocol 6a) ----------
+function manifest(s, result) {
+  const cp = CHECKPOINTS[s.step] || s.step;
+  const typeTxt = s.type ? typeShort(s.type) : "type not set";
+  const floors = result ? result.summary.floors : null;
+  const head = `[${typeTxt} · DU: opens at (b), harmony · ${cp} · ${s.lastRule || "no rule checked yet"}]`;
+  const items = [];
+  if (s.q0) items.push(["Q0", s.q0]);
+  if (s.tension && s.tension.statement) items.push(["Tension", s.tension.statement]);
+  const c = s.contract;
+  if (c.title) items.push(["Title", c.title]);
+  if (c.voice || c.key) items.push(["Key and voice", [c.key, c.voice].filter(Boolean).join(", ")]);
+  if (c.bpm) items.push(["Tempo", `${c.bpm} BPM ${c.feel || ""}`.trim()]);
+  if (c.form) items.push(["Form", c.form]);
+  items.push(["Never-say", c.neverSay ? c.neverSay : "not asked yet"]);
+  (s.constraints || []).forEach((k) => items.push(["Kept on purpose", k]));
+  if (floors !== null) items.push(["Open", floors ? `${floors} floor reading${floors > 1 ? "s" : ""} to decide` : "no floor readings open"]);
+  return { head, items };
+}
+
+// ---------- render ----------
+function render() {
+  const root = $("#app");
+  root.replaceChildren(ui.view === "home" ? viewHome() : viewSong());
+  renderStatus();
+}
+function renderStatus() {
+  const el = $("#status");
+  if (!el) return;
+  const parts = [];
+  parts.push(claudeReady() ? "Claude: on" : "Claude: off (measure-only)");
+  parts.push(cap.db && cap.uid ? "Songs saved to your account" : "Songs saved on this device");
+  el.textContent = parts.join(" · ");
+}
+
+function viewHome() {
+  const list = Object.values(songs).sort((a, b) => b.updatedAt - a.updatedAt);
+  const seeds = ["I'm grateful and I'm angry", "My father taught me how to work but not how to rest", "The night my daughter asked if God was real", "Something worth keeping", "I kept the house but lost the home"];
+  return h("main", { class: "wrap" },
+    h("section", { class: "intro" },
+      h("p", { class: "eyebrow", text: "Luthier v45 · songwriting engine" }),
+      h("h1", { text: "Start with one line." }),
+      h("p", { class: "lede", text: "Give the engine a seed: an emotion, an image, a title, or two things true at once that shouldn't be. It asks the questions, drafts with you, and measures every line against what real songs do. You write the song." }),
+      h("div", { class: "actions" },
+        h("button", { class: "btn primary", onclick: () => newSong("seed") }, "New song from a seed"),
+        h("button", { class: "btn", onclick: () => newSong("lyric") }, "Measure a lyric I wrote"),
+      ),
+      h("div", { class: "seeds" },
+        h("span", { class: "label", text: "Example seeds" }),
+        h("div", { class: "chips" }, seeds.map((t) => h("button", { class: "chip", onclick: () => { newSong("seed"); const s = cur(); s.seed = t; save(); render(); } }, t))),
+      ),
+    ),
+    h("section", { class: "songs" },
+      h("h2", { text: "Your songs" }),
+      list.length ? h("ul", { class: "songlist" }, list.map((s) => h("li", {},
+        h("button", { class: "songrow", onclick: () => { ui.songId = s.id; ui.view = "song"; render(); window.scrollTo(0, 0); } },
+          h("span", { class: "songtitle", text: s.contract.title || s.seed || "Untitled lyric" }),
+          h("span", { class: "songmeta", text: [s.type ? typeLabel(s.type) : null, CHECKPOINTS[s.step], new Date(s.updatedAt).toLocaleDateString()].filter(Boolean).join(" · ") }),
+        )))) : h("p", { class: "empty", text: "No songs yet. Your songs appear here as you work, so you can pick one up later." }),
+    ),
+    h("section", { class: "about" },
+      h("h2", { text: "What the engine measures" }),
+      h("ul", { class: "facts" },
+        h("li", {}, h("b", { text: "Mouth test. " }), "Syllables a second at your tempo against 44,041 real sung lines (ceiling 6.4), consonant friction, tongue-twisters at word joins."),
+        h("li", {}, h("b", { text: "Line endings. " }), "Real lyric lines end on a weak word only 5% of the time. The last word carries the payload."),
+        h("li", {}, h("b", { text: "Pictures. " }), "Every verse line, or the line beside it, holds something you can touch, smell, see or hear."),
+        h("li", {}, h("b", { text: "The chorus. " }), "Shorter lines, mirrored pairs, its own words repeated, the title in the hook position, a held last word on an open vowel."),
+      ),
+      h("p", { class: "fine", text: "Scores are information, not verdicts (Principle 10). The engine measures; the artist interprets." }),
+    ),
+  );
+}
+
+function stepper(s) {
+  const order = s.mode === "lyric" ? ORDER_LYRIC : ORDER;
+  const i = order.indexOf(s.step);
+  return h("ol", { class: "stepper", "aria-label": "Progress" }, order.map((k, j) =>
+    h("li", { class: j < i ? "done" : j === i ? "now" : "" , title: CHECKPOINTS[k] }, h("span", { text: CHECKPOINTS[k] }))));
+}
+
+function viewSong() {
+  const s = cur();
+  if (!s) { ui.view = "home"; return viewHome(); }
+  const result = s.lyric ? analyzeLyric(s.lyric, lyricOptions(s)) : null;
+  const m = manifest(s, result);
+  const body = {
+    seed: stepSeed, paste: stepPaste, q0: stepQ0, triage: stepTriage, confirm: stepConfirm,
+    intake: stepIntake, tension: stepTension, contract: stepContract, lyric: stepLyric, done: stepDone,
+  }[s.step];
+  return h("main", { class: "wrap" },
+    h("div", { class: "topbar" },
+      h("button", { class: "link", onclick: () => { ui.view = "home"; render(); } }, "‹ All songs"),
+      h("span", { class: "songname", text: s.contract.title || s.seed || "New song" }),
+    ),
+    stepper(s),
+    h("section", { class: "manifest" + (ui.showManifest ? " open" : "") },
+      h("button", { class: "manifest-head", "aria-expanded": String(ui.showManifest), onclick: () => { ui.showManifest = !ui.showManifest; render(); } },
+        h("code", { text: m.head }), h("span", { class: "toggle", text: ui.showManifest ? "Hide" : "Manifest" })),
+      ui.showManifest ? h("dl", {}, m.items.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])) : null,
+    ),
+    ui.error ? h("p", { class: "alert", role: "status", text: ui.error }) : null,
+    ui.busy ? busyCard() : body(s, result),
+  );
+}
+
+function busyCard() {
+  return h("section", { class: "card busy" },
+    h("p", { class: "eyebrow", text: ui.busy }),
+    h("p", { class: "thinking", text: "Thinking… this can take up to a minute." }),
+    h("pre", { id: "stream", class: "stream", text: ui.stream }),
+    ui.abort ? h("button", { class: "btn", onclick: () => ui.abort && ui.abort.abort() }, "Stop") : null,
+  );
+}
+
+function card(eyebrow, title, help, ...kids) {
+  return h("section", { class: "card" },
+    eyebrow ? h("p", { class: "eyebrow", text: eyebrow }) : null,
+    h("h2", { class: "q", text: title }),
+    help ? h("p", { class: "help", text: help }) : null,
+    ...kids);
+}
+
+function textAnswer(id, placeholder, value, onSubmit, label = "Continue", rows = 3) {
+  const ta = h("textarea", { id, rows: String(rows), placeholder });
+  ta.value = value || "";
+  return h("form", { class: "answer", onsubmit: (e) => { e.preventDefault(); const v = ta.value.trim(); if (v) onSubmit(v); else ta.focus(); } },
+    ta, h("button", { class: "btn primary", type: "submit" }, label));
+}
+
+function optionList(options, recommended, onPick) {
+  return h("div", { class: "options" }, options.map((o, i) =>
+    h("button", { class: "option" + (i === recommended ? " rec" : ""), onclick: () => onPick(i) },
+      h("span", { class: "letter", text: String.fromCharCode(65 + i) }),
+      h("span", { class: "otext", text: o }),
+      i === recommended ? h("span", { class: "recmark", text: "Recommended" }) : null)));
+}
+
+// --- steps ---
+function stepSeed(s) {
+  return card("Step 1 · The seed", "Give the engine one line.", "An emotion, an image, a situation, a title, or a lyric tension: two things true at the same time that shouldn't be.",
+    textAnswer("seed", "I kept the house but lost the home", s.seed, (v) => {
+      s.seed = v; logChoice(s, { id: "Seed", question: "Give your seed", answer: v }); s.step = "q0"; save(); render();
+    }, "Continue", 2));
+}
+
+function stepPaste(s) {
+  return card("Lyric-first path · Module 29", "Paste your lyric.", "Mark sections with headers like [Verse 1], [Chorus], [Bridge]. Without headers, lines that repeat are read as the chorus. End a build line with > to say it is meant to pull forward.",
+    textAnswer("paste", "[Verse 1]\n…\n\n[Chorus]\n…", s.lyric, async (v) => {
+      s.lyric = v; s.drafts.push({ text: v, at: Date.now(), by: "writer" });
+      logChoice(s, { id: "Lyric", question: "The writer's lyric", answer: "(pasted lyric)" });
+      s.step = "q0"; save(); render();
+    }, "Continue", 12));
+}
+
+function stepQ0(s) {
+  return card("Q0 · The Sovereignty Question", "What do you think this song is about?", "No constraints. One sentence or ten. Whatever comes first. Your exact words are kept as the anchor for the whole session.",
+    textAnswer("q0", "It's about…", s.q0, async (v) => {
+      s.q0 = v; logChoice(s, { id: "Q0", question: "What do you think this song is about?", answer: v });
+      if (s.mode === "lyric") { s.step = "confirm"; save(); render(); await suggestFromLyric(s); }
+      else { s.step = "triage"; save(); render(); }
+    }));
+}
+
+async function suggestFromLyric(s) {
+  if (!claudeReady()) return;
+  try {
+    const r = await askJSON(P.suggestTypePrompt(s.lyric), "Reading your lyric");
+    s.suggestion = r;
+    if (r.title && !s.contract.title) s.contract.title = r.title;
+    save(); render();
+  } catch { /* the writer can pick by hand */ }
+}
+
+function stepTriage(s) {
+  const q = QUESTIONS.find((x) => s.triage[x.id] === undefined);
+  const t = scoreTriage(s.triage);
+  if (!q || (t.clear && Object.keys(s.triage).length >= 4)) {
+    // routing settled
+    s.step = "confirm"; save();
+    return stepConfirm(s);
+  }
+  const n = QUESTIONS.indexOf(q) + 1;
+  return card(`Triage · ${q.id} of Q9 · ${q.label}`, q.question, q.help,
+    optionList(q.options.map((o) => o.text), null, (i) => {
+      s.triage[q.id] = i;
+      logChoice(s, { id: q.id, question: q.question, options: q.options.map((o) => o.text), answer: q.options[i].text });
+      save(); render();
+    }),
+    n > 1 ? h("button", { class: "link", onclick: () => { const prev = QUESTIONS[n - 2]; delete s.triage[prev.id]; s.log = s.log.filter((e) => e.id !== prev.id); save(); render(); } }, "‹ Back a question") : null,
+  );
+}
+
+function stepConfirm(s) {
+  let picks = [];
+  let rec = 0;
+  let help = "";
+  if (s.mode === "lyric") {
+    const sug = s.suggestion;
+    if (sug && TYPES[(sug.type || "").split("/")[0]]) {
+      picks = [sug.type, ...(sug.alternatives || []).filter((x) => TYPES[(x || "").split("/")[0]])].slice(0, 3);
+      help = sug.evidence || "";
+    }
+  } else {
+    const t = scoreTriage(s.triage);
+    const top = t.ranked.slice(0, 3).map((r) => r.type);
+    picks = t.hybrid ? [t.hybrid, ...top].slice(0, 3) : top;
+    help = t.hybrid ? `Two types pull with about equal force. The primary type comes first and decides which intake runs.` : `Based on what you've told me. Q0 is the tiebreaker: does this type serve what you said the song is about?`;
+  }
+  while (picks.length < 3) { const extra = ["P", "N", "V", "LR", "A", "W"].find((x) => !picks.includes(x)); picks.push(extra); }
+  const others = Object.keys(TYPES).filter((k) => !picks.includes(k));
+  const sel = h("select", { id: "othertype", "aria-label": "Another type" },
+    h("option", { value: "", text: "Another type…" }), others.map((k) => h("option", { value: k, text: `${TYPES[k].name}: ${TYPES[k].job}` })));
+  const choose = (code, how) => {
+    s.type = code; s.lastRule = "Module 0 routing";
+    logChoice(s, { id: "Type", question: "Based on what you've told me, which type is this song?", options: picks.map(typeLabel), recommended: typeLabel(picks[rec]), answer: `${typeLabel(code)}${how ? " (" + how + ")" : ""}` });
+    s.step = s.mode === "lyric" ? "contract" : "intake"; save(); render();
+    if (s.step === "intake") nextIntake(s);
+  };
+  return card("Routing", `This sounds like a ${typeLabel(picks[0])}. Does that feel right?`, help,
+    optionList(picks.map((p) => `${typeLabel(p)}: ${p.includes("/") ? "a hybrid" : TYPES[p].job}`), rec, (i) => choose(picks[i])),
+    h("div", { class: "row" }, sel, h("button", { class: "btn", onclick: () => { if (sel.value) choose(sel.value, "writer's choice"); } }, "Use this type")),
+  );
+}
+
+async function nextIntake(s) {
+  if (!claudeReady()) {
+    const asked = new Set(s.log.map((e) => e.id));
+    const q = FALLBACK_INTAKE.find((x) => !asked.has(x.id));
+    s.pendingQ = q ? { ...q, options: [], recommended: null } : null;
+    if (!q) { s.intakeDone = true; s.step = "tension"; }
+    save(); render(); return;
+  }
+  try {
+    const r = await askJSON(P.intakePrompt(s), `${typeLabel(s.type)} intake`);
+    if (!r || r.done) { s.intakeDone = true; s.pendingQ = null; s.step = "tension"; save(); render(); return checkpointA(s); }
+    s.pendingQ = { id: r.id || "", question: r.question, why: r.why || "", options: (r.options || []).slice(0, 3), recommended: Number.isInteger(r.recommended) ? r.recommended : null };
+    save(); render();
+  } catch { /* error shown; retry button on the card */ }
+}
+
+function stepIntake(s) {
+  const q = s.pendingQ;
+  if (!q) {
+    return card("Type intake", "Ready for the next question.", "",
+      h("button", { class: "btn primary", onclick: () => nextIntake(s) }, "Ask the next question"),
+      h("button", { class: "link", onclick: () => { s.intakeDone = true; s.step = "tension"; save(); render(); checkpointA(s); } }, "Skip to the hook ›"));
+  }
+  const answer = (text, i) => {
+    logChoice(s, { id: q.id, question: q.question, options: q.options, recommended: q.recommended !== null ? q.options[q.recommended] : null, answer: text });
+    s.pendingQ = null; save(); nextIntake(s);
+  };
+  return card(`${typeLabel(s.type)} intake${q.id ? " · " + q.id : ""}`, q.question, q.why,
+    q.options.length ? optionList(q.options, q.recommended, (i) => answer(q.options[i], i)) : null,
+    h("p", { class: "label", text: q.options.length ? "Or in your own words" : "Your answer" }),
+    textAnswer("intake-" + (q.id || "x"), "Type your answer", "", (v) => answer(v), "Answer"),
+  );
+}
+
+async function checkpointA(s) {
+  if (!claudeReady()) return;
+  try {
+    const r = await askJSON(P.checkpointAPrompt(s), "Checkpoint (a): tension, hook, form");
+    s.tension = { statement: r.tension, hooks: r.hooks || [], recommended: r.recommended ?? 0, form: r.form, formWhy: r.formWhy };
+    s.defaults = { voice: r.voice, bpm: r.bpm, feel: r.feel, key: r.key, objects: (r.objects || []).join(", ") };
+    s.lastRule = "Principle 3, hook 4-9 syllables";
+    save(); render();
+  } catch { /* retry on the card */ }
+}
+
+function stepTension(s) {
+  const t = s.tension;
+  if (!t) {
+    return card("Checkpoint (a)", "Name the tension and choose the hook.", claudeReady() ? "The engine proposes a tension, three hooks and a form from your answers." : "Write the tension (two true things that refuse to resolve) and the title.",
+      claudeReady() ? h("button", { class: "btn primary", onclick: () => checkpointA(s) }, "Propose the tension and hooks") : null,
+      !claudeReady() ? manualTension(s) : null);
+  }
+  const hookTexts = t.hooks.map((x) => `${x.title}  (${measureCandidate(x.title, "chorus").syllables} syllables) · ${x.why}`);
+  return card("Checkpoint (a) · Tension, hook, form", "Which hook should carry the song?", `Tension: ${t.statement}`,
+    optionList(hookTexts, t.recommended, (i) => pickHook(s, t.hooks[i].title, true)),
+    h("p", { class: "label", text: "Or your own title" }),
+    textAnswer("ownhook", "Your title", "", (v) => pickHook(s, v, false), "Use my title", 1),
+    h("p", { class: "fine", text: `Proposed form: ${t.form || "—"}. ${t.formWhy || ""}` }),
+  );
+}
+
+function manualTension(s) {
+  const a = h("textarea", { id: "mt-tension", rows: "2", placeholder: "The two true things" });
+  const b = h("input", { id: "mt-title", placeholder: "Title (4 to 9 syllables)" });
+  return h("form", { class: "answer", onsubmit: (e) => { e.preventDefault(); if (!b.value.trim()) return b.focus(); s.tension = { statement: a.value.trim(), hooks: [], form: "" }; pickHook(s, b.value.trim(), false); } },
+    a, b, h("button", { class: "btn primary", type: "submit" }, "Continue"));
+}
+
+function pickHook(s, title, fromList) {
+  const t = s.tension || {};
+  s.contract.title = title;
+  if (t.form && !s.contract.form) s.contract.form = t.form;
+  const d = s.defaults || {};
+  for (const k of ["voice", "bpm", "feel", "key", "objects"]) if (d[k] && !s.contract[k]) s.contract[k] = d[k];
+  logChoice(s, { id: "Hook", question: "Which hook should carry the song?", options: (t.hooks || []).map((x) => x.title), recommended: t.hooks && t.hooks[t.recommended] ? t.hooks[t.recommended].title : null, answer: title + (fromList ? "" : " (writer's own)") });
+  s.step = "contract"; save(); render();
+}
+
+function stepContract(s) {
+  const c = s.contract;
+  const f = (id, label, value, attrs = {}, hint) => {
+    const input = h(attrs.rows ? "textarea" : "input", { id: "c-" + id, name: id, ...attrs });
+    input.value = value ?? "";
+    return h("label", { class: "field", for: "c-" + id }, h("span", { text: label }), input, hint ? h("small", { text: hint }) : null);
+  };
+  const form = h("form", { class: "contract", onsubmit: (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const get = (k) => String(fd.get(k) || "").trim();
+    const next = { ...c, title: get("title"), neverSay: get("neverSay"), objects: get("objects"), writerPhrases: get("writerPhrases"), voice: get("voice"), feel: get("feel"), key: get("key"), form: get("form"), writer: get("writer"),
+      bpm: Number(get("bpm")) || 80, beatsPerBar: Number(get("beatsPerBar")) || 4, barsPerLine: Number(get("barsPerLine")) || 2 };
+    const missing = [];
+    if (!next.title) missing.push("title");
+    if (!next.neverSay) missing.push("never-say list (write 'none' to waive it)");
+    if (missing.length) { ui.error = `Still needed: ${missing.join(", ")}.`; render(); return; }
+    ui.error = null;
+    s.contract = next;
+    logChoice(s, { id: "Contract", question: "Required inputs (Protocol 0b)", answer: `title: ${next.title}; never-say: ${next.neverSay}; voice: ${next.voice}; tempo: ${next.bpm} ${next.feel}; key: ${next.key}; form: ${next.form}` });
+    s.step = "lyric"; save(); render();
+    if (!s.lyric && claudeReady()) draft(s);
+  } },
+    f("title", "Title", c.title, { required: true }),
+    f("neverSay", "Never-say list", c.neverSay, {}, "Words or phrases this song must never use, separated by commas. Write 'none' to waive it."),
+    f("objects", "Objects of the story", c.objects, {}, "The things in the song. They count as pictures and are never flagged as rare."),
+    f("writerPhrases", "Your phrases", c.writerPhrases, {}, "Wording you want kept exactly. Lines carrying it are exempt from the word rules."),
+    h("div", { class: "grid2" },
+      f("voice", "Voice", c.voice, { placeholder: "e.g. male, weathered" }),
+      f("key", "Key", c.key, { placeholder: "e.g. G major" }),
+      f("bpm", "Tempo (BPM)", c.bpm, { type: "number", min: "40", max: "220", inputmode: "numeric" }),
+      f("feel", "Feel", c.feel, { placeholder: "slow burn, driving…" }),
+      f("beatsPerBar", "Beats a bar", c.beatsPerBar, { type: "number", min: "2", max: "12", inputmode: "numeric" }),
+      f("barsPerLine", "Bars a line", c.barsPerLine, { type: "number", min: "1", max: "8", step: "0.5", inputmode: "decimal" }, "Used for the singing-speed reading"),
+    ),
+    f("form", "Form", c.form, { placeholder: "V-PC-C-V-PC-C-B-C" }),
+    f("writer", "Your name for the credit line", c.writer, { placeholder: "Words and music: …" }),
+    h("button", { class: "btn primary", type: "submit" }, s.lyric ? "Save and measure" : claudeReady() ? "Save and draft the lyric" : "Save and write the lyric"),
+  );
+  return card("The contract · Protocol 0b", "Check the required inputs.", "The writing room doesn't open while one is empty. Your never-say list is a hard rule: any line using it is flagged.", form);
+}
+
+function lyricOptions(s) {
+  const c = s.contract;
+  const split = (x) => (x && x.toLowerCase() !== "none" ? x.split(",").map((y) => y.trim()).filter(Boolean) : []);
+  return { title: c.title || "", bpm: c.bpm || 80, beatsPerBar: c.beatsPerBar || 4, barsPerLine: c.barsPerLine || 2, neverSay: split(c.neverSay), objects: split(c.objects), writerPhrases: split(c.writerPhrases), hymn: s.type === "W" };
+}
+
+async function draft(s) {
+  try {
+    const text = await askText(P.draftPrompt(s), "Checkpoint (c): drafting the lyric");
+    if (text) { s.lyric = cleanLyric(text); s.drafts.push({ text: s.lyric, at: Date.now(), by: "engine draft" }); s.lastRule = "Module 10 lyric rules"; save(); render(); }
+  } catch { /* shown */ }
+}
+
+function readingsText(result) {
+  return result.findings.map((f) => `- [${f.level}] ${f.rule}${f.where && f.where.section ? ` (${f.where.section}${f.where.line ? " line " + f.where.line : ""})` : ""}: ${f.message}`).join("\n") || "No readings.";
+}
+
+async function revise(s, note, result) {
+  try {
+    const text = await askText(P.revisePrompt(s, s.lyric, readingsText(result), note), "Revising the lyric");
+    if (text) {
+      s.lyric = cleanLyric(text); s.drafts.push({ text: s.lyric, at: Date.now(), by: "engine revision", note });
+      logChoice(s, { id: "Revise", question: "Revision note", answer: note || "(fix what the readings flag)" });
+      save(); render();
+    }
+  } catch { /* shown */ }
+}
+
+async function coach(s, f, result) {
+  const sec = result.sections.find((x) => x.name === f.where.section && !x.ref);
+  const line = sec && sec.lines[f.where.line - 1];
+  if (!line) return;
+  const idx = f.where.line - 1;
+  const neighbors = sec.lines.slice(Math.max(0, idx - 2), idx + 3).map((l) => (l === line ? "> " : "  ") + l.text).join("\n");
+  const problems = result.findings.filter((x) => x.where && x.where.section === f.where.section && x.where.line === f.where.line).map((x) => x.message).join(" ");
+  try {
+    const r = await askJSON(P.coachPrompt(s, line.text, `${sec.name} (${sec.kind})`, problems, neighbors), `Coaching one line`);
+    const alts = (r.alternatives || []).slice(0, 3).map((t) => ({ text: t.replace(/[.,;:]+$/, ""), m: measureCandidate(t, sec.kind, lyricOptions(s)) }));
+    ui.coach = { section: sec.name, line: f.where.line, original: line.text, kind: sec.kind, alts };
+    render();
+  } catch { /* shown */ }
+}
+
+function replaceLine(s, original, replacement) {
+  const lines = s.lyric.split("\n");
+  let n = 0;
+  const out = lines.map((l) => (l.replace(/\s*>\s*$/, "").trim() === original.trim() ? (n++, l.replace(original.trim(), replacement)) : l));
+  if (!n) return false;
+  s.lyric = out.join("\n");
+  s.drafts.push({ text: s.lyric, at: Date.now(), by: "line coach" });
+  logChoice(s, { id: "Coach", question: `Replace: ${original}`, answer: replacement });
+  return true;
+}
+
+const LEVEL_NAME = { floor: "Floor", flag: "Flag", info: "Note" };
+
+function stepLyric(s, result) {
+  const ta = h("textarea", { id: "lyric", class: "lyricbox", rows: "18", spellcheck: "true", placeholder: "[Verse 1]\n…\n\n[Chorus]\n…" });
+  ta.value = s.lyric || "";
+  let t = null;
+  ta.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => { s.lyric = ta.value; save(); renderReadings(s); }, 500);
+  });
+  const noteBox = h("textarea", { id: "revnote", rows: "2", placeholder: "Your note: what to change (or leave empty to fix the floors and flags)" });
+
+  const editor = h("section", { class: "card" },
+    h("p", { class: "eyebrow", text: `Checkpoint (c) · Lyric skeleton · ${s.drafts.length} draft${s.drafts.length === 1 ? "" : "s"} kept` }),
+    h("h2", { class: "q", text: s.lyric ? "Edit freely. The readings update as you type." : claudeReady() ? "Draft the lyric, or write it yourself." : "Write the lyric. The readings update as you type." }),
+    ta,
+    h("div", { class: "row wrap" },
+      claudeReady() && !s.lyric ? h("button", { class: "btn primary", onclick: () => draft(s) }, "Draft it from my answers") : null,
+      s.drafts.length > 1 ? h("button", { class: "btn", onclick: () => { s.drafts.pop(); s.lyric = s.drafts[s.drafts.length - 1].text; save(); render(); } }, "Undo last change") : null,
+    ),
+    claudeReady() && s.lyric ? h("div", { class: "revise" }, noteBox, h("button", { class: "btn", onclick: () => revise(s, noteBox.value.trim(), analyzeLyric(s.lyric, lyricOptions(s))) }, "Revise with Claude")) : null,
+  );
+  return h("div", { class: "stack" }, editor, h("div", { id: "readings" }, readingsView(s, result)));
+}
+
+function renderReadings(s) {
+  const el = $("#readings");
+  if (!el) return;
+  const result = s.lyric ? analyzeLyric(s.lyric, lyricOptions(s)) : null;
+  el.replaceChildren(readingsView(s, result));
+  const m = manifest(s, result);
+  const head = document.querySelector(".manifest-head code");
+  if (head) head.textContent = m.head;
+}
+
+function readingsView(s, result) {
+  if (!result || !result.sections.length) return h("p", { class: "empty", text: "The readings appear here once there are lines to measure." });
+  s.lastRule = "the floor (mouth test, endings, pictures, chorus)";
+  const { summary, metrics } = result;
+  const chips = h("div", { class: "summary" },
+    h("span", { class: "pill floor" + (summary.floors ? "" : " zero"), text: `${summary.floors} floor` }),
+    h("span", { class: "pill flag" + (summary.flags ? "" : " zero"), text: `${summary.flags} flag${summary.flags === 1 ? "" : "s"}` }),
+    h("span", { class: "pill info", text: `${summary.infos} note${summary.infos === 1 ? "" : "s"}` }));
+
+  const lineView = h("div", { class: "lines" }, result.sections.filter((x) => !x.ref).map((sec) =>
+    h("div", { class: "sec" },
+      h("p", { class: "secname", text: `${sec.name}${sec.rhyme ? " · rhyme " + sec.rhyme.scheme : ""}` }),
+      sec.lines.map((l, i) => {
+        const pct = Math.min(100, (l.sps / BANDS.sps.p99) * 100);
+        const hits = result.findings.filter((f) => f.where && f.where.section === sec.name && f.where.line === i + 1);
+        const worst = hits.find((f) => f.level === "floor") ? "floor" : hits.find((f) => f.level === "flag") ? "flag" : hits.length ? "info" : "ok";
+        return h("div", { class: "ln " + worst },
+          h("span", { class: "syl", title: "syllables", text: String(l.syllables) }),
+          h("span", { class: "ltext", text: l.text }),
+          h("span", { class: "meter", title: `${l.sps.toFixed(2)} syllables a second; ticks at the real median, 95th percentile and the 6.4 ceiling` },
+            h("span", { class: "fill", style: `width:${pct.toFixed(0)}%` }),
+            h("span", { class: "tick", style: `left:${(BANDS.sps.median / BANDS.sps.p99 * 100).toFixed(0)}%` }),
+            h("span", { class: "tick", style: `left:${(BANDS.sps.p95 / BANDS.sps.p99 * 100).toFixed(0)}%` })),
+        );
+      }))));
+
+  const findings = h("ol", { class: "findings" }, ["floor", "flag", "info"].flatMap((lvl) => result.findings.filter((f) => f.level === lvl).map((f) => {
+    const canCoach = claudeReady() && f.where && f.where.line && (lvl === "floor" || lvl === "flag");
+    const isKept = (s.constraints || []).some((k) => k.startsWith(f.rule) && f.where && f.where.text && k.includes(f.where.text));
+    return h("li", { class: "finding " + lvl + (isKept ? " kept" : "") },
+      h("p", { class: "fhead" }, h("span", { class: "lvl", text: LEVEL_NAME[lvl] }), h("span", { text: f.rule })),
+      f.where && f.where.section ? h("p", { class: "fwhere", text: `${f.where.section}${f.where.line ? ", line " + f.where.line : ""}${f.where.text ? ": " + f.where.text : ""}` }) : null,
+      h("p", { class: "fmsg", text: f.message }),
+      f.fix ? h("p", { class: "ffix", text: f.fix }) : null,
+      h("div", { class: "row wrap" },
+        canCoach ? h("button", { class: "btn small", onclick: () => coach(s, f, result) }, "Coach this line") : null,
+        lvl === "floor" && f.where && f.where.text && !isKept ? h("button", { class: "btn small ghost", onclick: () => {
+          s.constraints.push(`${f.rule}: kept on purpose: "${f.where.text}"`);
+          logChoice(s, { id: "Keep", question: `Keep a line the engine flagged (${f.rule})`, answer: f.where.text });
+          save(); render();
+        } }, "Keep it on purpose") : null,
+        isKept ? h("span", { class: "keptmark", text: "Kept on purpose" }) : null,
+      ));
+  })));
+
+  const coachCard = ui.coach ? h("section", { class: "card coach" },
+    h("p", { class: "eyebrow", text: `Coach · ${ui.coach.section}, line ${ui.coach.line}` }),
+    h("p", { class: "orig", text: ui.coach.original }),
+    h("div", { class: "options" }, ui.coach.alts.map((a, i) => h("button", { class: "option", onclick: () => { if (replaceLine(s, ui.coach.original, a.text)) { ui.coach = null; save(); render(); } } },
+      h("span", { class: "letter", text: String.fromCharCode(65 + i) }),
+      h("span", { class: "otext" }, a.text, h("small", { class: "candnote", text: ` ${a.m.syllables} syllables · ${a.m.notes.length ? a.m.notes.join(", ") : "clears the line rules"}` }))))),
+    h("button", { class: "link", onclick: () => { ui.coach = null; render(); } }, "Keep my line")) : null;
+
+  const openFloors = result.findings.filter((f) => f.level === "floor" && !(s.constraints || []).some((k) => f.where && f.where.text && k.includes(f.where.text) && k.startsWith(f.rule)));
+  const lockBtn = h("button", { class: "btn primary", disabled: openFloors.length ? true : null, onclick: () => {
+    s.locked = true; s.lockedAt = Date.now();
+    logChoice(s, { id: "Lock", question: "Lock the lyric", answer: "Locked" });
+    s.step = "done"; save(); render(); completion(s);
+  } }, "Lock the lyric");
+
+  return h("div", { class: "stack" },
+    coachCard,
+    h("section", { class: "card" },
+      h("p", { class: "eyebrow", text: "The readings · information, not verdicts" }),
+      chips,
+      h("dl", { class: "metrics" },
+        metric("Verse line", metrics.verseLen ? `${metrics.verseLen} syl` : "—", "real 8.2, hits 8.7"),
+        metric("Chorus line", metrics.chorusLen ? `${metrics.chorusLen} syl` : "—", "real 7.0"),
+        metric("Title sung", `${metrics.titleCount}×`, "real 2–9, hits ~6"),
+        metric("Hook", metrics.hookSyllables ? `${metrics.hookSyllables} syl` : "—", "4–9"),
+        metric("Speed", `${metrics.spsMedian}/s`, `median line at ${s.contract.bpm} BPM`),
+        metric("Ladder lines", `${Math.round(metrics.ladderShare * 100)}%`, "hits ~10%"),
+      ),
+      lineView,
+    ),
+    h("section", { class: "card" }, h("p", { class: "eyebrow", text: "What to look at" }), result.findings.length ? findings : h("p", { text: "Nothing to report. Every line clears the floor." })),
+    h("section", { class: "card lock" },
+      h("h2", { class: "q", text: "Lock the lyric" }),
+      h("p", { class: "help", text: openFloors.length ? `${openFloors.length} floor reading${openFloors.length > 1 ? "s are" : " is"} still open. Fix ${openFloors.length > 1 ? "them" : "it"}, or keep a line on purpose; the choice goes into the record.` : "The floor is clear. Locking keeps this draft as the song's lyric and runs the completion check against your Q0." }),
+      lockBtn),
+  );
+}
+function metric(k, v, note) { return h("div", { class: "metric" }, h("dt", { text: k }), h("dd", {}, h("b", { text: v }), h("small", { text: note }))); }
+
+async function completion(s) {
+  if (!claudeReady()) return;
+  try {
+    const r = await askJSON(P.completionPrompt(s, s.lyric), "Completion check against Q0");
+    s.completion = r; save(); render();
+  } catch { /* shown */ }
+}
+
+function songRecord(s) {
+  const result = analyzeLyric(s.lyric, lyricOptions(s));
+  const c = s.contract;
+  const out = [];
+  out.push(`# ${c.title || "Untitled"}`);
+  if (c.writer) out.push(`Words and music: ${c.writer}`);
+  out.push("");
+  out.push(`Type: ${typeLabel(s.type)} · Tempo: ${c.bpm} BPM ${c.feel || ""} · Key: ${c.key || "not set"} · Voice: ${c.voice || "not set"} · Form: ${c.form || "not set"}`);
+  out.push("");
+  out.push("## Lyric");
+  out.push("");
+  out.push(s.lyric.replace(/\s*>\s*$/gm, ""));
+  out.push("");
+  out.push("## The anchor");
+  out.push(`Q0: ${s.q0}`);
+  if (s.tension && s.tension.statement) out.push(`Tension: ${s.tension.statement}`);
+  if (s.completion) out.push(`Completion check: ${s.completion.delivers}. ${s.completion.reading}`);
+  out.push("");
+  out.push("## Readings (Luthier v45, information not verdicts)");
+  out.push(readingsText(result));
+  out.push("");
+  out.push("## Intake log");
+  s.log.forEach((e) => out.push(`- ${e.id}: ${e.question}${e.options && e.options.length ? ` [options: ${e.options.join(" | ")}]` : ""}${e.recommended ? ` [recommended: ${e.recommended}]` : ""} -> ${e.answer}`));
+  if (s.constraints.length) { out.push(""); out.push("## Kept on purpose"); s.constraints.forEach((k) => out.push(`- ${k}`)); }
+  return out.join("\n");
+}
+
+function stepDone(s) {
+  const rec = songRecord(s);
+  const c = s.completion;
+  const copyBtn = h("button", { class: "btn", onclick: async (e) => {
+    try { await navigator.clipboard.writeText(rec); e.target.textContent = "Copied"; }
+    catch { const pre = $("#record"); const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); e.target.textContent = "Selected: copy it"; }
+  } }, "Copy the song record");
+  const saveBtn = cap.downloads ? h("button", { class: "btn primary", onclick: async () => {
+    try { await cap.downloads.save({ filename: `${(s.contract.title || "song").replace(/[^\w\s-]/g, "").trim() || "song"} - song record.md`, data: rec }); }
+    catch (e) { ui.error = e && e.code === "declined" ? null : "The file wasn't saved."; render(); }
+  } }, "Save the song record") : null;
+  return h("div", { class: "stack" },
+    card("Completion · Q0", "Does the song deliver what you said it was about?", `You said: "${s.q0}"`,
+      c ? h("div", { class: "verdict " + (c.delivers || "") },
+        h("p", { class: "eyebrow", text: c.delivers === "yes" ? "Delivers" : c.delivers === "partly" ? "Partly delivers" : "Something was lost" }),
+        h("p", { text: c.reading || "" }), c.lost ? h("p", { class: "ffix", text: c.lost }) : null)
+        : claudeReady() ? h("button", { class: "btn", onclick: () => completion(s) }, "Run the completion check") : h("p", { class: "help", text: "Read the lyric against your words above. If something was lost, unlock and keep writing." }),
+      h("div", { class: "row wrap" }, saveBtn, copyBtn,
+        h("button", { class: "btn ghost", onclick: () => { s.locked = false; s.step = "lyric"; logChoice(s, { id: "Unlock", question: "Unlock the lyric", answer: "Unlocked" }); save(); render(); } }, "Unlock and keep writing")),
+    ),
+    h("section", { class: "card" },
+      h("p", { class: "eyebrow", text: "Next in the engine" }),
+      h("p", { text: "Checkpoints (b), (d) and (e) come next: the harmonic skeleton and departure budget, the melody search, and the production notes, then the lead sheet, chart, songbook and demo." }),
+    ),
+    h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
+  );
+}
+
+// ---------- boot ----------
+async function boot() {
+  render();
+  try { await Promise.all([loadLexicon(), P.loadSpec()]); }
+  catch (e) { $("#app").prepend(h("p", { class: "alert", text: "The word data didn't load. Reload the page to try again." })); }
+  render();
+  initCaps();
+}
+boot();

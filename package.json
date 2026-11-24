@@ -1,0 +1,10 @@
+{
+  "name": "luthier-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Luthier songwriting engine as a web app",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
