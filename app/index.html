@@ -143,6 +143,27 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .coach .orig { font-family: var(--mono); color: var(--muted); text-decoration: line-through; }
 .verdict { border-left: 3px solid var(--accent); padding-left: 12px; display: grid; gap: 6px; }
 .verdict.no { border-left-color: var(--floor); } .verdict.partly { border-left-color: var(--flag); }
+.facts2 { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 0.9rem; }
+.facts2 dt { color: var(--muted); }
+.facts2 dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.progress { display: grid; gap: 6px; }
+.progress .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.progress .fill { height: 100%; background: var(--accent); width: 0; }
+.deaths { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; font: 0.85rem var(--mono); }
+.deaths li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dotted var(--line); padding: 3px 0; }
+.num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.candhead { display: flex; align-items: baseline; gap: 10px; }
+.rank { font: 700 1.6rem var(--display); color: var(--brass); }
+.rollwrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.roll { display: block; }
+.roll .bar { stroke: var(--line); stroke-width: 1; }
+.roll .brk { stroke: var(--flag); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.roll .nt { fill: var(--accent); }
+.roll .nt.peak { fill: var(--brass); }
+.roll .nt.money { fill: var(--ink); }
+.roll .chordname { fill: var(--muted); font: 600 10px var(--mono); }
+.roll .syltext { fill: var(--ink); font: 9px var(--body); }
+details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>

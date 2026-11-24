@@ -11,6 +11,12 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
 7. **Checkpoint (c), the lyric:** Claude drafts from your answers, or you write it yourself. The readings update as you type. You can coach any flagged line (three alternatives, each measured before you see it) or revise with a note.
 8. **Lock and completion check:** the song is checked against your Q0. Then you save the song record, which holds the lyric, the readings, the full intake log and any lines you kept on purpose.
 
+9. **Checkpoint (d), the melody search (Module 27):**
+   - The engine writes 3,000 candidates from the locked lyric. The hook is written title-first: stressed syllables go on the beat, the high note falls on the first strong syllable, and the last strong syllable is held on a stable degree.
+   - Each candidate is filtered against the type's Table A row (tessitura, passaggio, leaps, range, density, syncopation and monotony), rejected against Table B, then ranked with the Table C weights.
+   - The order is fingerprinted before anything is played. The top three can be heard with chords and bass and seen as piano rolls.
+   - Choosing anything other than #1 needs a sentence of reason. The chosen melody can be saved as a MIDI file.
+
 The app also has a **lyric-first path** (Module 29): paste a finished lyric and the app measures it.
 
 ## What is measured (app/js/engine/lyric.js)
@@ -43,13 +49,21 @@ Tests: `npm test` (Node 20 or later).
 - `app/data/lexicon.json`: 53,108 words. It combines the CMU Pronouncing Dictionary (phones and stress), wordfreq Zipf frequencies (Speer et al., CC BY-SA 4.0) and the Brysbaert, Warriner & Kuperman (2014) concreteness norms. To rebuild it: `python3 tools/build_lexicon.py <Brysbaert file>`.
 - `app/data/spec.json`: the parts of Luthier v45 the app hands to Claude: the Lite Edition, the principles, Module 0 and its triage, Module 10, Module 23, Module 25, and the type templates, Modules 13–22. To rebuild it from a new version of the spec: `pandoc Luthier_vNN.docx -t markdown -o luthier.md && python3 tools/extract_spec.py luthier.md app/data/spec.json`. The original .docx is not committed.
 
+## What the melody search does not have yet
+
+- **Realness (27.8, 0.25 of the rank).** It needs the reference set of 3,310 real choruses. The expectation term (0.05) needs the harmony search. Both are left out, and the other weights are kept in proportion.
+- **The interval model.** It is a hand-set stand-in for the POP909-trained model. Surprisal is read under a fixed reference interval model, so every candidate is judged by the same listener and not by the generator that wrote it.
+- **Chords.** These are drawn from eight common loops until checkpoint (b) is built.
+- **Meditative songs.** Table A has no Meditative row, so these are read against W-contemplative.
+- **Line lengths.** A line gets more bars when its syllables would crowd the type's density ceiling.
+
 ## What comes next
 
-This is stage 1: the session through to a locked, measured lyric. The engine's next checkpoints are:
+This is stage 2: the session through to a locked lyric and a chosen melody. Still to come:
 
 - (b) the harmonic skeleton and the departure-unit ledger;
-- (d) the melody search, which brings in Module 1's spectral β and the 1/f boundary;
 - (e) the production notes;
+- the floor on the finished song (Table G);
 - the lead sheet, the Nashville chart, the songbook and the demo.
 
 Luthier © Jason Bryant 2026.

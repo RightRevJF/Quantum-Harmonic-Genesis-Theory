@@ -5,6 +5,8 @@ import { loadLexicon } from "./engine/lexicon.js";
 import { analyzeLyric, measureCandidate, BANDS } from "./engine/lyric.js";
 import { QUESTIONS, scoreTriage, TYPES, typeLabel, typeShort } from "./engine/triage.js";
 import * as P from "./prompts.js";
+import * as Mel from "./engine/melody.js";
+import * as Audio from "./audio.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -94,9 +96,9 @@ function logChoice(s, entry) {
   s.log.push({ ...entry, at: new Date().toISOString() });
 }
 
-const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", lyric: "(c) Lyric skeleton", done: "Completion" };
-const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "lyric", "done"];
-const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "lyric", "done"];
+const CHECKPOINTS = { seed: "Seed", paste: "Your lyric", q0: "Q0", triage: "Triage", confirm: "Type", intake: "Type intake", tension: "(a) Tension, hook, form", contract: "Contract", lyric: "(c) Lyric skeleton", melody: "(d) Melody", done: "Completion" };
+const ORDER = ["seed", "q0", "triage", "confirm", "intake", "tension", "contract", "lyric", "melody", "done"];
+const ORDER_LYRIC = ["paste", "q0", "confirm", "contract", "lyric", "melody", "done"];
 
 // ---------- Claude helpers ----------
 function claudeReady() { return Boolean(cap.sample); }
@@ -226,7 +228,7 @@ function viewSong() {
   const m = manifest(s, result);
   const body = {
     seed: stepSeed, paste: stepPaste, q0: stepQ0, triage: stepTriage, confirm: stepConfirm,
-    intake: stepIntake, tension: stepTension, contract: stepContract, lyric: stepLyric, done: stepDone,
+    intake: stepIntake, tension: stepTension, contract: stepContract, lyric: stepLyric, melody: stepMelody, done: stepDone,
   }[s.step];
   return h("main", { class: "wrap" },
     h("div", { class: "topbar" },
@@ -629,7 +631,7 @@ function readingsView(s, result) {
   const lockBtn = h("button", { class: "btn primary", disabled: openFloors.length ? true : null, onclick: () => {
     s.locked = true; s.lockedAt = Date.now();
     logChoice(s, { id: "Lock", question: "Lock the lyric", answer: "Locked" });
-    s.step = "done"; save(); render(); completion(s);
+    s.step = "melody"; save(); render(); window.scrollTo(0, 0);
   } }, "Lock the lyric");
 
   return h("div", { class: "stack" },
@@ -650,7 +652,7 @@ function readingsView(s, result) {
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "What to look at" }), result.findings.length ? findings : h("p", { text: "Nothing to report. Every line clears the floor." })),
     h("section", { class: "card lock" },
       h("h2", { class: "q", text: "Lock the lyric" }),
-      h("p", { class: "help", text: openFloors.length ? `${openFloors.length} floor reading${openFloors.length > 1 ? "s are" : " is"} still open. Fix ${openFloors.length > 1 ? "them" : "it"}, or keep a line on purpose; the choice goes into the record.` : "The floor is clear. Locking keeps this draft as the song's lyric and runs the completion check against your Q0." }),
+      h("p", { class: "help", text: openFloors.length ? `${openFloors.length} floor reading${openFloors.length > 1 ? "s are" : " is"} still open. Fix ${openFloors.length > 1 ? "them" : "it"}, or keep a line on purpose; the choice goes into the record.` : "The floor is clear. Locking keeps this draft as the song's lyric and opens the melody search." }),
       lockBtn),
   );
 }
@@ -687,6 +689,12 @@ function songRecord(s) {
   out.push("");
   out.push("## Intake log");
   s.log.forEach((e) => out.push(`- ${e.id}: ${e.question}${e.options && e.options.length ? ` [options: ${e.options.join(" | ")}]` : ""}${e.recommended ? ` [recommended: ${e.recommended}]` : ""} -> ${e.answer}`));
+  if (s.melody) {
+    out.push(""); out.push("## Melody (Module 27)");
+    out.push(`Candidate ${s.melody.id}, rank ${s.melody.rank} of the search with seed ${s.melody.seed} (fingerprint ${s.melody.fingerprint}). Key ${s.melody.key}, voice ${s.melody.voice}, form ${s.melody.form}.`);
+    out.push(`Chords: verse ${s.melody.loops.verse.join("-")}, chorus ${s.melody.loops.hook.join("-")}.`);
+    const mm = s.melody.m; out.push(`Readings: composite ${mm.composite.toFixed(3)}; beta ${mm.beta === null ? "n/a" : mm.beta.toFixed(2)}; CMP ${mm.cmp.toFixed(2)}; memory ${mm.mh.toFixed(2)}; surprisal ${mm.ic.toFixed(2)} (${mm.bits.toFixed(2)} bits); fit ${mm.fit.toFixed(2)}.`);
+  }
   if (s.constraints.length) { out.push(""); out.push("## Kept on purpose"); s.constraints.forEach((k) => out.push(`- ${k}`)); }
   return out.join("\n");
 }
@@ -708,15 +716,168 @@ function stepDone(s) {
         h("p", { class: "eyebrow", text: c.delivers === "yes" ? "Delivers" : c.delivers === "partly" ? "Partly delivers" : "Something was lost" }),
         h("p", { text: c.reading || "" }), c.lost ? h("p", { class: "ffix", text: c.lost }) : null)
         : claudeReady() ? h("button", { class: "btn", onclick: () => completion(s) }, "Run the completion check") : h("p", { class: "help", text: "Read the lyric against your words above. If something was lost, unlock and keep writing." }),
+      s.melody ? h("div", { class: "row wrap" },
+        h("button", { class: "btn", onclick: () => { const tl = melodyTimeline(s); Audio.play(tl, { bpm: s.contract.bpm || 80, beatsPerBar: s.contract.beatsPerBar || 4, key: Mel.parseKey(s.contract.key) }); } }, "▶ Hear the song"),
+        h("button", { class: "btn ghost", onclick: () => Audio.stop() }, "■ Stop"),
+        cap.downloads ? h("button", { class: "btn", onclick: async () => {
+          const tl = melodyTimeline(s);
+          const data = Audio.midiFile(tl, { bpm: s.contract.bpm || 80, beatsPerBar: s.contract.beatsPerBar || 4, key: Mel.parseKey(s.contract.key) }, s.contract.title);
+          try { await cap.downloads.save({ filename: `${(s.contract.title || "song").replace(/[^\w\s-]/g, "").trim() || "song"}.mid`, data }); } catch { /* declined */ }
+        } }, "Save MIDI") : null) : h("button", { class: "btn primary", onclick: () => { s.step = "melody"; save(); render(); } }, "Find a melody"),
       h("div", { class: "row wrap" }, saveBtn, copyBtn,
         h("button", { class: "btn ghost", onclick: () => { s.locked = false; s.step = "lyric"; logChoice(s, { id: "Unlock", question: "Unlock the lyric", answer: "Unlocked" }); save(); render(); } }, "Unlock and keep writing")),
     ),
     h("section", { class: "card" },
       h("p", { class: "eyebrow", text: "Next in the engine" }),
-      h("p", { text: "Checkpoints (b), (d) and (e) come next: the harmonic skeleton and departure budget, the melody search, and the production notes, then the lead sheet, chart, songbook and demo." }),
+      h("p", { text: "Checkpoints (b) and (e) come next: the harmonic skeleton with the departure budget, and the production notes. Then the floor on the finished song (words against the melody, breath, cadence), the lead sheet, chart, songbook and demo." }),
+      s.melody ? h("button", { class: "link", onclick: () => { s.step = "melody"; save(); render(); } }, "‹ Back to the melody search") : null,
     ),
     h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Song record" }), h("pre", { id: "record", class: "record", text: rec })),
   );
+}
+
+// ---------- checkpoint (d): the melody search ----------
+const SVGNS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, v);
+  kids.flat().forEach((k) => k && el.append(k instanceof Node ? k : document.createTextNode(String(k))));
+  return el;
+}
+const NOTE_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
+const noteName = (m) => `${NOTE_NAMES[m % 12]}${Math.floor(m / 12) - 1}`;
+
+// A piano roll of one section: notes as bars on pitch rows, syllables under, chord names over.
+function pianoRoll(sec, brief) {
+  const ps = sec.notes.map((n) => n.p);
+  if (!ps.length) return null;
+  const lo = Math.min(...ps, brief.voice.brk) - 1, hi = Math.max(...ps, brief.voice.brk) + 1;
+  const W = 14, H = 7, top = 18, rows = hi - lo + 1;
+  const width = Math.max(200, sec.length * W + 4), height = top + rows * H + 30;
+  const kids = [];
+  const barLen = brief.beatsPerBar * 2;
+  for (let b = 0; b * barLen < sec.length; b++) {
+    kids.push(svg("line", { x1: b * barLen * W, x2: b * barLen * W, y1: top - 4, y2: top + rows * H, class: "bar" }));
+    kids.push(svg("text", { x: b * barLen * W + 3, y: 11, class: "chordname" }, sec.loop[b % sec.loop.length]));
+  }
+  const brkY = top + (hi - brief.voice.brk) * H;
+  kids.push(svg("line", { x1: 0, x2: width, y1: brkY, y2: brkY, class: "brk" }));
+  sec.notes.forEach((n) => {
+    const x = n.onset * W, y = top + (hi - n.p) * H;
+    kids.push(svg("rect", { x: x + 1, y: y - H / 2 + 1, width: Math.max(4, n.dur * W - 2), height: H - 1, rx: 2, class: "nt" + (n.peak ? " peak" : "") + (n.money ? " money" : "") }, svg("title", {}, `${n.syl} · ${noteName(n.p)} · ${n.chord}`)));
+    if (n.syl !== "–") kids.push(svg("text", { x: x + 1, y: top + rows * H + 14 + (n.onset % 2 ? 10 : 0), class: "syltext" }, n.syl));
+  });
+  return h("div", { class: "rollwrap" }, svg("svg", { viewBox: `0 0 ${width} ${height}`, width, height, class: "roll", role: "img", "aria-label": `${sec.name} melody` }, kids));
+}
+
+function melodyBrief(s) {
+  const brief = Mel.makeBrief(s, s.lyric);
+  return brief;
+}
+
+async function runSearch(s) {
+  const brief = melodyBrief(s);
+  const runs = (s.melodyRuns || 0) + 1;
+  const seed = (Mel.hashStr(s.id) + 20261113 + runs) >>> 0;
+  ui.search = { running: true, done: 0, n: 3000, survivors: 0 };
+  ui.error = null;
+  render();
+  const res = await Mel.search(brief, { n: 3000, seed, onProgress: (d, n, sv) => {
+    ui.search = { running: true, done: d, n, survivors: sv };
+    const bar = $("#searchbar"); if (bar) bar.style.width = `${(d / n) * 100}%`;
+    const lab = $("#searchlabel"); if (lab) lab.textContent = `${d.toLocaleString()} of ${n.toLocaleString()} built · ${sv} survivors`;
+  } });
+  s.melodyRuns = runs;
+  s.lastRule = "Module 27: Tables A, B, C";
+  ui.search = { running: false, result: res, brief };
+  s.melodyReport = { seed, generated: res.generated, built: res.built, survivors: res.survivors, rateBuilt: res.rateBuilt, rateAll: res.rateAll, fingerprint: res.fingerprint, deaths: res.deaths.slice(0, 10), calibration: res.calibration, at: Date.now() };
+  logChoice(s, { id: "Search", question: "Melody search (Module 27)", answer: `seed ${seed}; ${res.generated} generated; ${res.survivors} survivors (${(res.rateBuilt * 100).toFixed(1)}% of built); fingerprint ${res.fingerprint}` });
+  save(); render();
+}
+
+function chooseMelody(s, cand, brief, reason) {
+  const tl = Audio.timeline(cand, brief);
+  s.melody = {
+    seed: ui.search.result.seed, id: cand.id, rank: cand.rank, fingerprint: ui.search.result.fingerprint,
+    m: { composite: cand.m.composite, beta: cand.m.beta, cmp: cand.m.cmp, mh: cand.m.mh, ic: cand.m.ic, fit: cand.m.fit, bits: cand.m.bits },
+    loops: cand.plan.loop, form: cand.plan.form.join(" "), key: brief.key.name, voice: brief.voiceName,
+    notes: tl.notes.map((n) => [n.t, n.dur, n.p, n.syl]), chords: tl.chords.map((c) => [c.t, c.dur, c.roman]), length: tl.length,
+  };
+  logChoice(s, { id: "Melody", question: "Which melody?", options: ui.search.result.top.map((c) => `#${c.rank} (candidate ${c.id})`), recommended: "#1", answer: `#${cand.rank} (candidate ${cand.id})${reason ? " because: " + reason : ""}` });
+  Audio.stop();
+  s.step = "done"; save(); render(); window.scrollTo(0, 0); completion(s);
+}
+
+function stepMelody(s) {
+  const brief = melodyBrief(s);
+  const S = ui.search;
+  const facts = [
+    ["Type row", `${typeLabel(s.type)}${brief.tableARowNote ? " (" + brief.tableARowNote + ")" : ""}`],
+    ["Key", brief.key.name], ["Voice", `${brief.voiceName}: ${noteName(brief.voice.floor)}–${noteName(brief.voice.ceil)}, break near ${noteName(brief.voice.brk)}`],
+    ["Tempo", `${brief.bpm} BPM, ${brief.beatsPerBar}/4, ${brief.barsPerLine} bars a line`], ["Calibration", brief.calibration.replace("_", " ")],
+  ];
+  const briefCard = card("Checkpoint (d) · The melody search", "The engine writes 3,000 melodies from your words and keeps the best three.",
+    "The hook is written from the title's stress: stressed syllables on the beat, the high note on the first strong syllable, the last strong syllable held on a stable note. Every candidate is filtered against your type's limits, rejected below what 95% of real choruses achieve, then ranked. The order is fixed before you hear anything.",
+    h("dl", { class: "facts2" }, facts.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])),
+    S && S.running ? h("div", { class: "progress" }, h("div", { class: "track" }, h("div", { id: "searchbar", class: "fill", style: `width:${(S.done / S.n) * 100}%` })), h("p", { id: "searchlabel", class: "fine", text: `${S.done} of ${S.n} built` }))
+      : h("button", { class: "btn primary", onclick: () => runSearch(s) }, S && S.result ? "Run it again with a new seed" : s.melody ? "Search again" : "Run the search"),
+    h("p", { class: "fine", text: "Until the harmony stage is built, the chords come from eight common loops spread across the candidates. Two parts of the spec's ranking are not here yet: realness (it needs the reference set of real choruses) and the harmonic-expectation term. The rest of the weights are kept in proportion." }),
+  );
+  if (!S || !S.result) return h("div", { class: "stack" }, briefCard, s.melody ? h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Chosen melody" }), h("p", { text: `Candidate ${s.melody.id} (rank ${s.melody.rank}) from seed ${s.melody.seed}, fingerprint ${s.melody.fingerprint}.` }), h("button", { class: "btn", onclick: () => { s.step = "done"; save(); render(); } }, "Keep it and continue")) : null);
+
+  const r = S.result;
+  const report = h("section", { class: "card" },
+    h("p", { class: "eyebrow", text: `The report · fingerprint ${r.fingerprint}` }),
+    h("dl", { class: "metrics" },
+      metric("Generated", r.generated.toLocaleString(), `seed ${r.seed}`),
+      metric("Survivors", r.survivors.toLocaleString(), `${(r.rateBuilt * 100).toFixed(1)}% of ${r.built.toLocaleString()} built`),
+      metric("Unbuildable", String(r.unbuildable), `${(r.rateAll * 100).toFixed(1)}% over every attempt`),
+    ),
+    r.rateBuilt > 0.2 ? h("p", { class: "fine", text: "Above the spec's 20% warning band: the filters are passing many. Read the three by ear." }) : r.rateBuilt < 0.01 ? h("p", { class: "alert", text: "Under 1% survived. The commonest death below says what to change: the key, the voice, or the bars a line." }) : null,
+    h("p", { class: "label", text: "Deaths by rule" }),
+    h("ol", { class: "deaths" }, r.deaths.slice(0, 10).map(([rule, k]) => h("li", {}, h("span", { text: rule }), h("span", { class: "num", text: k.toLocaleString() })))),
+  );
+  if (!r.top.length) return h("div", { class: "stack" }, briefCard, report);
+
+  const cards = r.top.map((c) => {
+    const tl = Audio.timeline(c, S.brief);
+    const hook = c.sections.find((x) => x.kind === "chorus" && !x.repeat) || c.sections[0];
+    const verse = c.sections.find((x) => x.kind === "verse" && !x.repeat);
+    let hookStart = 0; { let t = 0; const barLen = S.brief.beatsPerBar * 2; for (const sec of c.sections) { if (sec === hook) { hookStart = t; break; } t += Math.ceil(sec.length / barLen) * barLen; } }
+    const reason = h("input", { id: "why-" + c.id, placeholder: "Why this one? (asked when you pass over #1)" });
+    const m = c.m;
+    return h("section", { class: "card cand" },
+      h("div", { class: "candhead" }, h("span", { class: "rank", text: `#${c.rank}` }), h("span", { class: "eyebrow", text: `Candidate ${c.id} · composite ${m.composite.toFixed(3)}` })),
+      h("div", { class: "row wrap" },
+        h("button", { class: "btn small", onclick: () => Audio.play(tl, S.brief, { from: hookStart, to: hookStart + hook.length + 2 }) }, "▶ Hear the chorus"),
+        h("button", { class: "btn small", onclick: () => Audio.play(tl, S.brief) }, "▶ Whole song"),
+        h("button", { class: "btn small ghost", onclick: () => Audio.stop() }, "■ Stop")),
+      h("p", { class: "label", text: `${hook.name} · peak and held title note marked` }),
+      pianoRoll(hook, S.brief),
+      verse ? h("details", {}, h("summary", { text: `${verse.name}` }), pianoRoll(verse, S.brief)) : null,
+      h("dl", { class: "metrics" },
+        metric("β pitch", m.beta === null ? "—" : m.beta.toFixed(2), "boundary 0.75–1.35"),
+        metric("CMP", m.cmp.toFixed(2), "real median 0.40"),
+        metric("Memory", m.mh.toFixed(2), "real median 0.79"),
+        metric("Surprisal", `${m.ic.toFixed(2)}`, `${m.bits.toFixed(2)} bits mean`),
+        metric("Type fit", m.fit.toFixed(2), `verse ${m.verseContour}, chorus ${m.hookContour}`),
+        metric("Lift", `${m.verseLift > 0 ? "+" : ""}${m.verseLift} st`, `chorus over verse; range ${m.range}`),
+      ),
+      h("p", { class: "fine", text: `Chords: verse ${c.plan.loop.verse.join("–")}, chorus ${c.plan.loop.hook.join("–")} · form ${c.plan.form.join(" ")} · longest run on one note ${m.longestRun}` }),
+      c.rank > 1 ? reason : null,
+      h("button", { class: "btn primary", onclick: () => {
+        const why = c.rank > 1 ? reason.value.trim() : "";
+        if (c.rank > 1 && !why) { reason.focus(); ui.error = "Say in a sentence why you're choosing this one over #1. It goes into the record."; render(); return; }
+        chooseMelody(s, c, S.brief, why);
+      } }, `Choose #${c.rank}`),
+    );
+  });
+  return h("div", { class: "stack" }, briefCard, report, ...cards);
+}
+
+function melodyTimeline(s) {
+  if (!s.melody) return null;
+  return { notes: s.melody.notes.map(([t, dur, p, syl]) => ({ t, dur, p, syl })), chords: s.melody.chords.map(([t, dur, roman]) => ({ t, dur, roman, ...Mel.chordTones(roman, Mel.parseKey(s.contract.key).mode) })), length: s.melody.length };
 }
 
 // ---------- boot ----------
