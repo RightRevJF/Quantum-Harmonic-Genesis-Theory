@@ -94,8 +94,16 @@ Tests: `npm test` (Node 20 or later).
 - **Chords without a chosen harmony.** If you skip checkpoint (b), the melody search draws from eight common loops.
 - **The harmony model.** It is a first-order chord model over the loops Window 28 lists, not the spec's corpus-trained model, so the expectation medians are this model's own. The total budget counts each section's design once (repeats are not recharged), plus melodic and rhythmic events of 2 DU or more. One-DU melodic and rhythmic moves count only against the per-moment ceiling. This is the app's reading of 19.9.
 - **Meditative songs.** Table A has no Meditative row, so these are read against W-contemplative.
-- **Rhythm.** Each line's rhythm is chosen by a small optimiser that puts stressed syllables on beats 1 and 3 and keeps unstressed ones off them. Lines of the same shape in a section share a rhythm. It aligns more tightly than real songs do (about 0.9 against the real median of 0.78).
-- **Melisma (27.12).** Held chorus notes get a two-note turn at the corpus rates (0.17 at line ends, 0.12 inside a line), a step down three times in four. The verse gets none. The held title note and the chorus's last word keep one note. The second note is slurred, and the lyric holds over it in every document.
+- **Rhythm and phrasing.** These follow the spec's measurements of real songs:
+  - Window 25's placement shares by stress, drawn rather than maximised, so about 0.70–0.75 of strong-beat onsets carry a stress (real median 0.78);
+  - eighth notes nearly throughout, with the title's held syllable long;
+  - Table GK: a line's last note a quarter at the median, then a breath of about two beats (at least a beat), with commas allowed to breathe;
+  - 27.20's cell grammar: section forms drawn from the pop or folk priors (ABAC, AAAA, AABC, AAAB, ABAB, free ABCD); a repeated letter takes its cell fitted by stress, with new pitches that keep the opening direction; the rhythm vocabulary for new letters (walk, long–short, anticipation, late start, held middle);
+  - the answered pair: the line before the midpoint ends open, the chorus's last line on the tonic;
+  - the line peaks early (Window 25: 17% of the way in).
+
+  `node tools/rhythm_report.mjs [type]` measures all of this against the real-song bands.
+- **Melisma (27.12).** Chorus notes a quarter or longer can take a two-note turn, at rates set so the hook's share of turned syllables sits near Table G's, a step down three times in four. The verse gets none. The held title note and the chorus's last word keep one note. The second note is slurred, and the lyric holds over it in every document.
 - **Line lengths.** A line gets more bars when its syllables would crowd the type's density ceiling.
 
 ## What comes next

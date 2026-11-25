@@ -1281,7 +1281,7 @@ function chooseMelody(s, cand, brief, reason) {
   s.melody = {
     seed: ui.search.result.seed, id: cand.id, rank: cand.rank, fingerprint: ui.search.result.fingerprint,
     m: { composite: cand.m.composite, beta: cand.m.beta, cmp: cand.m.cmp, mh: cand.m.mh, ic: cand.m.ic, fit: cand.m.fit, bits: cand.m.bits },
-    loops: cand.plan.loop, form: cand.plan.form.join(" "), key: brief.key.name, voice: brief.voiceName,
+    loops: cand.plan.loop, form: cand.sections.filter((x) => !x.repeat && x.form).map((x) => `${x.name} ${x.form}`).join(", "), key: brief.key.name, voice: brief.voiceName,
     notes: tl.notes.map((n) => [n.t, n.dur, n.p, n.syl]), chords: tl.chords.map((c) => [c.t, c.dur, c.roman]), length: tl.length,
   };
   const mp = mapFor(s, cand, brief);
@@ -1352,7 +1352,7 @@ function stepMelody(s) {
       (() => { const f = Floor.floorReport(c, S.brief, analyzeLyric(s.lyric, lyricOptions(s))); const bad = f.checks.filter((x) => x.level === "floor").map((x) => x.name.toLowerCase());
         return h("p", { class: "floorchip " + (f.finished ? "ok" : "bad"), text: f.finished ? `Finished-song floor: clear (${f.flags} flag${f.flags === 1 ? "" : "s"})` : `Under the floor: ${bad.join("; ")}` }); })(),
       mapView(mapFor(s, c, S.brief)),
-      h("p", { class: "fine", text: `Chords: ${Object.entries(c.plan.loop).map(([k, v]) => `${k} ${v.join("–")}`).join(" · ")} · form ${c.plan.form.join(" ")} · longest run on one note ${m.longestRun}` }),
+      h("p", { class: "fine", text: `Chords: ${Object.entries(c.plan.loop).map(([k, v]) => `${k} ${v.join("–")}`).join(" · ")} · phrase forms ${c.sections.filter((x) => !x.repeat && x.form).map((x) => `${x.name.replace(/\s*\d+$/, "").toLowerCase()} ${x.form}`).filter((v, i, arr) => arr.indexOf(v) === i).join(", ")} · longest run on one note ${m.longestRun}` }),
       c.rank > 1 ? reason : null,
       h("button", { class: "btn primary", onclick: () => {
         const why = c.rank > 1 ? reason.value.trim() : "";

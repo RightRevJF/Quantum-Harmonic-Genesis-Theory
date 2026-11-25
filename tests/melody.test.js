@@ -110,3 +110,43 @@ test("the voice row: a picked row is used as is; an older free-text voice reads 
   const b2 = M.makeBrief({ type: "P", contract: { voice: "Clear, steady, bright", key: "A major (clear female voice)" } }, "[Verse]\nla la la la");
   assert.equal(b2.voiceName, "female");
 });
+
+test("rhythm and phrasing sit inside the spec's real-song bands (Windows 25, 30, 79; Table GK)", async () => {
+  const b = M.makeBrief(song("V"), LYRIC);
+  const res = await M.search(b, { n: 300, seed: 21 });
+  const strongShare = [], lastNote = [], restAfter = [], peak = [];
+  res.top.forEach((t) => t.sections.filter((s) => !s.repeat).forEach((s) => {
+    const syl = s.notes.filter((n) => !n.melisma);
+    const strong = syl.filter((n) => n.onset % 8 === 0 || n.onset % 8 === 4);
+    if (strong.length) strongShare.push(strong.filter((n) => n.stress > 0).length / strong.length);
+    s.lines.forEach((l, li) => {
+      const ns = l.notes, last = ns[ns.length - 1];
+      lastNote.push(last.dur);
+      const next = s.lines[li + 1] ? s.lines[li + 1].notes[0].onset : l.start + l.slot;
+      restAfter.push(next - (last.onset + last.dur));
+      const top = Math.max(...ns.map((n) => n.p));
+      peak.push(ns.findIndex((n) => n.p === top) / Math.max(1, ns.length - 1));
+      assert.ok(next - (last.onset + last.dur) >= 2, "every line leaves at least a beat to breathe");
+    });
+    assert.match(s.form, /^[A-D]+$/);
+  }));
+  const med = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  assert.ok(mean(strongShare) > 0.55 && mean(strongShare) < 0.92, `stressed on strong beats ${mean(strongShare)}: near the real 0.78, not pinned`);
+  assert.ok(med(lastNote) >= 1 && med(lastNote) <= 3, "a line's last note is about a quarter");
+  assert.ok(med(restAfter) >= 3 && med(restAfter) <= 6, `the rest after a line is about two beats (${med(restAfter)} eighths)`);
+  assert.ok(med(peak) <= 0.35, "the line peaks early");
+});
+
+test("the chorus's last line comes home to the tonic (27.20's answered pair)", async () => {
+  const b = M.makeBrief(song("V"), LYRIC);
+  let home = 0, total = 0;
+  for (let i = 0; i < 60; i++) {
+    const c = M.buildCandidate(b, 33, i);
+    const ch = c.sections.find((s) => s.kind === "chorus");
+    const last = ch.lines[ch.lines.length - 1].notes.filter((n) => !n.melisma).pop();
+    if (last.money) continue;
+    total++; if (M.degreeOf(last.p, b.key) === 1) home++;
+  }
+  assert.ok(home / total > 0.8, `${home}/${total}`);
+});

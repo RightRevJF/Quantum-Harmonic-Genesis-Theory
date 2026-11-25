@@ -135,16 +135,22 @@ export const LOOPS = {
 const FUNCTION = new Set("a an the and but or of to in on at by for with from as is am are was were be been it its i me my we us our you your he him his she her they them their this that than then so if not no do does did has have had will would can could shall should may might must".split(" "));
 function syllabify(line) {
   const out = [];
-  tokenize(line).forEach((w) => {
-    const L = lookup(w);
-    const vowels = L.phones.filter(isVowelPhone);
-    const n = Math.max(1, vowels.length);
-    for (let i = 0; i < n; i++) {
-      const v = vowels[i] || "AH0";
-      let stress = Number(v.slice(-1)) || 0;
-      if (n === 1) stress = FUNCTION.has(w) ? 0 : 1;
-      out.push({ word: w, part: i, of: n, text: n === 1 ? w : `${w}${i < n - 1 ? "-" : ""}`, stress, reduced: /^(AH|IH)0$/.test(v), vowel: v.replace(/\d/, "") });
-    }
+  // a comma (or dash) inside the line is a place the singer may breathe (Window 79's lead sheets cut phrases there)
+  const segs = line.split(/[,;:—–]|\s-\s/);
+  segs.forEach((seg, si) => {
+    const before = out.length;
+    tokenize(seg).forEach((w) => {
+      const L = lookup(w);
+      const vowels = L.phones.filter(isVowelPhone);
+      const n = Math.max(1, vowels.length);
+      for (let i = 0; i < n; i++) {
+        const v = vowels[i] || "AH0";
+        let stress = Number(v.slice(-1)) || 0;
+        if (n === 1) stress = FUNCTION.has(w) ? 0 : 1;
+        out.push({ word: w, part: i, of: n, text: n === 1 ? w : `${w}${i < n - 1 ? "-" : ""}`, stress, reduced: /^(AH|IH)0$/.test(v), vowel: v.replace(/\d/, "") });
+      }
+    });
+    if (si < segs.length - 1 && out.length > before) out[out.length - 1].comma = true;
   });
   // fix multi-syllable display: show the word on its first syllable, "-" continuation after
   out.forEach((s) => { if (s.of > 1) s.text = s.part === 0 ? s.word : "–"; });
@@ -152,61 +158,164 @@ function syllabify(line) {
 }
 
 // ---------- rhythm from the words ----------
-// Returns [{syl, onset (eighths from line start), dur (eighths)}] in a slot of `slot` eighths.
+// Window 25: where real sung syllables land, by stress (shares of each class; the sixteenth
+// share is folded out because this grid is eighths): stressed 31% strong beat, 21% other beat,
+// 32% offbeat; unstressed 12%, 22%, 45%. Stressed syllables are barely longer than unstressed
+// (0.49 against 0.44 beats): real singing is eighths nearly throughout, and length belongs to the
+// title's held syllable. Table GK (fixes 885-887): a line's last note is a quarter at the median
+// and the rest after it 1.25 / 2 / 4 beats (quartiles); the least breath is 1.5 beats.
+const PLACE = { 1: { strong: 0.31 / 0.84, beat: 0.21 / 0.84, off: 0.32 / 0.84 }, 0: { strong: 0.09 / 0.76, beat: 0.22 / 0.76, off: 0.45 / 0.76 } };
+const DUR_W = { 0: { 1: 0.8, 2: 0.2 }, 1: { 1: 0.62, 2: 0.33, 3: 0.05 } };
+const LAST_W = { 1: 0.15, 2: 0.45, 3: 0.2, 4: 0.12, 6: 0.08 };
+const REST_W = { 3: 0.18, 4: 0.3, 5: 0.12, 6: 0.12, 7: 0.06, 8: 0.14, 10: 0.05, 12: 0.03 };
+// 27.20's rhythm vocabulary: each a legal reading of the words
+export const STYLES = ["walk", "longshort", "anticipation", "late", "heldmiddle"];
+
+function posClass(pos, barLen, bpb) {
+  const p = pos % barLen;
+  if (p === 0 || (bpb === 4 && p === barLen / 2)) return "strong";
+  return p % 2 === 0 ? "beat" : "off";
+}
+
 function lineRhythm(syls, slot, r, opts = {}) {
-  // Principle 25 and Window 30, as a small dynamic program: choose each syllable's length
-  // (1-3 eighths; the title's held syllable 3-4) and a pickup so stressed syllables land on the
-  // strong beats and unstressed ones stay off them, with a little noise so candidates differ.
-  const breath = 2;
-  const avail = slot - breath;
   const bpb = opts.beatsPerBar || 4;
-  const strongEvery = bpb === 4 ? 4 : bpb * 2;
   const barLen = bpb * 2;
   const n = syls.length;
+  const minBreath = slot - n >= 5 ? 3 : 2;
+  const avail = slot - minBreath;
   if (n === 0 || n > avail) return null;
-  // one noise stream per section, so lines of the same shape get the same rhythm (cells return)
-  const rn = opts.noiseSeed !== undefined ? rng(opts.noiseSeed) : r;
-  const noise = syls.map(() => [rn() * 0.5, rn() * 0.5, rn() * 0.5, rn() * 0.5]);
-  const startNoise = [0, 1, 2, 3].map(() => rn() * 0.6);
-  const gain = (i, pos) => {
-    const st = syls[i].stress > 0;
-    let g = 0;
-    if (pos % strongEvery === 0) g += st ? 1.0 : -0.8;
-    else if (pos % 2 === 0) g += st ? 0.35 : 0;
-    else g += st ? -0.3 : 0.05;
-    if (i === opts.money && opts.placement) g += opts.placement.includes((pos % barLen) / 2) ? 1.5 : -0.5;
-    return g;
+  const style = opts.style || "walk";
+  const counts = { strong: 0, beat: 0, off: 0 };
+  for (let q = 0; q < barLen; q++) counts[posClass(q, barLen, bpb)]++;
+  const placeW = (i, pos) => {
+    const st = syls[i].stress > 0 ? 1 : 0;
+    const cls = posClass(pos, barLen, bpb);
+    let w = PLACE[st][cls] / counts[cls];
+    if (style === "anticipation" && st && cls === "off" && posClass(pos + 1, barLen, bpb) === "strong") w *= 3; // a stress pulled an eighth early (10.19)
+    if (i === opts.money && opts.placement) w *= opts.placement.includes((pos % barLen) / 2) ? 6 : 0.15;
+    return w;
   };
-  const durs = (i) => (i === opts.money ? [3, 4] : syls[i].stress > 0 ? [1, 2, 3] : [1, 2]);
-  // best[i][pos] = best score placing syllables i.. starting at pos
-  const memo = new Map();
-  const solve = (i, pos) => {
-    if (i === n) return { score: 0, plan: [] };
-    const key = i * 64 + pos;
-    if (memo.has(key)) return memo.get(key);
-    let best = { score: -Infinity, plan: null };
-    durs(i).forEach((d, di) => {
-      const end = pos + d;
-      if (end + (n - i - 1) > avail) return;
-      const rest = solve(i + 1, end);
-      if (!rest.plan) return;
-      const sc = gain(i, pos) + noise[i][di] + rest.score - (d === 3 && i !== opts.money ? 0.25 : 0);
-      if (sc > best.score) best = { score: sc, plan: [d, ...rest.plan] };
-    });
-    memo.set(key, best);
-    return best;
+  const middle = Math.floor(n / 2);
+  const durW = (i) => {
+    if (i === opts.money) return { 3: 0.5, 4: 0.5 };
+    if (i === n - 1) return LAST_W;
+    const st = syls[i].stress > 0 ? 1 : 0;
+    let w = { ...DUR_W[st] };
+    if (style === "longshort" && st) w = { 1: 0.35, 2: 0.6, 3: 0.05 };
+    if (style === "heldmiddle" && i === middle && st) w = { 2: 0.3, 3: 0.4, 4: 0.3 };
+    return w;
   };
-  let pick0 = null;
-  for (let s0 = 0; s0 < Math.min(4, avail - n + 1); s0++) {
-    const res = solve(0, s0);
-    if (res.plan && (!pick0 || res.score + startNoise[s0] > pick0.score)) pick0 = { score: res.score + startNoise[s0], s0, plan: res.plan };
+  const gapW = (i) => (syls[i].comma && i < n - 1 ? { 0: 0.35, 1: 0.35, 2: 0.3 } : { 0: 1 });
+  const restW = (rest) => {
+    if (rest < minBreath) return 0;
+    const keys = Object.keys(REST_W).map(Number);
+    const k = keys.reduce((a, b) => (Math.abs(b - rest) < Math.abs(a - rest) ? b : a));
+    return REST_W[k] / (1 + Math.abs(k - rest));
+  };
+  const maxStart = Math.min(6, avail - n);
+  const startW = (s0) => (style === "late" ? [0.1, 0.15, 0.25, 0.25, 0.15, 0.1, 0.05] : [0.3, 0.25, 0.2, 0.1, 0.08, 0.05, 0.02])[s0] || 0.01;
+  // backward sums: B[i][pos] = total weight of placing syllables i.. from pos to the end of the slot
+  const B = Array.from({ length: n + 1 }, () => new Float64Array(slot + 1));
+  for (let pos = 0; pos <= slot; pos++) B[n][pos] = restW(slot - pos);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let pos = 0; pos < slot; pos++) {
+      let tot = 0;
+      const pw = placeW(i, pos);
+      for (const [d, wd] of Object.entries(durW(i))) for (const [g, wg] of Object.entries(gapW(i))) {
+        const nx = pos + Number(d) + Number(g);
+        if (nx > slot) continue;
+        tot += pw * wd * wg * B[i + 1][nx];
+      }
+      B[i][pos] = tot;
+    }
   }
-  if (!pick0) return null;
-  let pos = pick0.s0;
-  const notes = syls.map((syl, i) => { const nn = { syl, onset: pos, dur: pick0.plan[i] }; pos += pick0.plan[i]; return nn; });
-  const last = notes[notes.length - 1];
-  last.dur = Math.max(last.dur, avail - last.onset);
+  const draw = (items) => { const sum = items.reduce((a, x) => a + x[1], 0); if (!sum) return null; let x = r() * sum; for (const it of items) { x -= it[1]; if (x <= 0) return it[0]; } return items[items.length - 1][0]; };
+  const s0 = draw(Array.from({ length: maxStart + 1 }, (_, k) => [k, startW(k) * B[0][k]]));
+  if (s0 === null) return null;
+  const notes = [];
+  let pos = s0;
+  for (let i = 0; i < n; i++) {
+    const opts2 = [];
+    const pw = placeW(i, pos);
+    for (const [d, wd] of Object.entries(durW(i))) for (const [g, wg] of Object.entries(gapW(i))) {
+      const nx = pos + Number(d) + Number(g);
+      if (nx > slot) continue;
+      const w = pw * wd * wg * B[i + 1][nx];
+      if (w > 0) opts2.push([[Number(d), Number(g)], w]);
+    }
+    const pick2 = draw(opts2);
+    if (!pick2) return null;
+    notes.push({ syl: syls[i], onset: pos, dur: pick2[0] });
+    pos += pick2[0] + pick2[1];
+  }
+  notes.style = style;
   return notes;
+}
+
+// 27.20 amended (v63): a repeated cell fitted to a new line BY STRESS. The cell's stressed
+// onsets take the new line's stressed syllables in order; weak syllables share the onsets
+// between; a weak run before the first stress is the pickup and after the last the tail.
+// Refused when the stress counts differ by more than one or the weak syllables cannot fit.
+function fitCell(cell, syls, slot, beatsPerBar) {
+  const anchors = cell.filter((c) => c.syl.stress > 0).map((c) => c.onset);
+  const sIdx = syls.map((x, i) => (x.stress > 0 ? i : -1)).filter((i) => i >= 0);
+  if (!anchors.length || !sIdx.length || Math.abs(anchors.length - sIdx.length) > 1) return null;
+  let A = anchors.slice(0, sIdx.length);
+  if (sIdx.length > anchors.length) {
+    // one more stress: split the longest gap on a beat
+    let best = -1, gap = 0;
+    for (let k = 0; k + 1 < A.length; k++) if (A[k + 1] - A[k] > gap) { gap = A[k + 1] - A[k]; best = k; }
+    if (best < 0 || gap < 4) return null;
+    let mid = A[best] + Math.floor(gap / 2); if (mid % 2) mid--;
+    A.splice(best + 1, 0, mid);
+  }
+  // room for the pickup: the cell moves later by whole beats if the weak run needs it
+  const pick = sIdx[0];
+  if (A[0] < pick) { const sh = Math.ceil((pick - A[0]) / 2) * 2; A = A.map((x) => x + sh); }
+  // room between stresses: a span too short for its weak syllables pushes the rest of the cell on
+  for (let k = 0; k + 1 < sIdx.length; k++) {
+    const weak = sIdx[k + 1] - sIdx[k] - 1;
+    const need = weak + 1 - (A[k + 1] - A[k]);
+    if (need > 0) for (let j = k + 1; j < A.length; j++) A[j] += need;
+  }
+  const onsets = new Array(syls.length).fill(null);
+  sIdx.forEach((si, k) => { onsets[si] = A[k]; });
+  for (let i = pick - 1, t = A[0] - 1; i >= 0; i--, t--) onsets[i] = t;
+  for (let k = 0; k + 1 < sIdx.length; k++) {
+    const a = sIdx[k], z = sIdx[k + 1], weak = z - a - 1;
+    const span = A[k + 1] - A[k];
+    for (let j = 1; j <= weak; j++) onsets[a + j] = A[k] + Math.max(j, Math.round((span * j) / (weak + 1)));
+  }
+  const last = sIdx[sIdx.length - 1];
+  for (let i = last + 1, t = A[A.length - 1] + 1; i < syls.length; i++, t++) onsets[i] = t;
+  // the line must leave a breath before the slot ends: slide the whole cell earlier if it can
+  const endMax = slot - 3;
+  let over = onsets[onsets.length - 1] + 1 - endMax;
+  if (over > 0) { const room = onsets[0]; if (room >= over) { for (let i = 0; i < onsets.length; i++) onsets[i] -= over; } else return null; }
+  for (let i = 1; i < onsets.length; i++) if (onsets[i] <= onsets[i - 1]) return null;
+  if (onsets[0] < 0) return null;
+  const lastLen = cell[cell.length - 1].dur;
+  return syls.map((syl, i) => ({ syl, onset: onsets[i], dur: i < syls.length - 1 ? Math.min(4, onsets[i + 1] - onsets[i]) : Math.max(1, Math.min(lastLen, endMax + 1 - onsets[i])) }));
+}
+
+function onsetSimilarity(a, b) {
+  const A = new Set(a.map((x) => x.onset)), Bs = new Set(b.map((x) => x.onset));
+  const inter = [...A].filter((x) => Bs.has(x)).length;
+  return (2 * inter) / (A.size + Bs.size || 1);
+}
+
+// 27.20: section forms, drawn from the corpus family's priors (pop: free ABCD 27%, then ABAC,
+// AAAA, AABC, AAAB, ABAB; the folk and hymn corpora lean to AAAA).
+const FORM_PRIORS = {
+  pop: [["ABCD", 0.27], ["ABAC", 0.105], ["AAAA", 0.1], ["AABC", 0.096], ["AAAB", 0.088], ["ABAB", 0.084]],
+  folk: [["AAAA", 0.3], ["ABAB", 0.15], ["AABC", 0.15], ["ABAC", 0.15], ["AAAB", 0.1], ["ABCD", 0.15]],
+};
+export function drawForm(r, family) {
+  const pri = FORM_PRIORS[family] || FORM_PRIORS.pop;
+  const sum = pri.reduce((a, x) => a + x[1], 0);
+  let x = r() * sum;
+  for (const [f, w] of pri) { x -= w; if (x <= 0) return f; }
+  return pri[0][0];
 }
 
 // ---------- pitch generation ----------
@@ -245,7 +354,14 @@ function choosePitch(r, ctx) {
     w *= Math.exp(-((p - center) ** 2) / (2 * sd * sd));
     if (prev2 !== null && prev !== null && Math.abs(prev - prev2) >= 5 && Math.sign(iv) === -Math.sign(prev - prev2)) w *= 3; // gap-fill
     if (prev2 !== null && prev === prev2 && iv === 0) w *= ctx.runLimit && ctx.run >= ctx.runLimit ? 0 : 0.05;
-    if (endLine && [1, 3, 5].includes(degreeOf(p, key))) w *= 2;
+    if (endLine && !ctx.endWant && [1, 3, 5].includes(degreeOf(p, key))) w *= 2;
+    // 27.20: the answered pair - the line before the midpoint ends open, the closing line on the tonic
+    if (ctx.endWant === "open") w *= [2, 5, 7].includes(degreeOf(p, key)) ? 5 : 0.25;
+    if (ctx.endWant === "tonic") w *= degreeOf(p, key) === 1 && (ctx.ceiling === undefined || p <= ctx.ceiling) ? 10 : 0.05;
+    // a repeated cell keeps its opening direction (Schoenberg's basic idea heard again)
+    if (ctx.dirWant !== undefined && ctx.dirWant !== 0 && prev !== null) w *= Math.sign(iv) === ctx.dirWant ? 4 : 0.25;
+    // Window 25: up early, then down through the line
+    if (ctx.frac !== undefined && prev !== null && iv !== 0) w *= ctx.frac <= 0.2 ? (iv > 0 ? 1.8 : 0.6) : ctx.frac >= 0.35 ? (iv < 0 ? 1.4 : 0.75) : 1;
     if (bias && prev !== null) w *= iv < 0 ? 1 + bias : iv > 0 ? 1 / (1 + bias) : 1;
     return w;
   });
@@ -293,59 +409,75 @@ function buildSection(sec, plan, r, brief, ref) {
   const section = { name: sec.name, kind: sec.kind, barLen, loop: loopFor(plan.loop, sec.kind), lines: [], notes: [] };
   let t = 0;
   let prev = null, prev2 = null, run = 1;
-  const rhythmSeed = Math.floor(r() * 4294967295);
-  const form = plan.form;
+  const form = plan.forms[sec.kind] || plan.forms.verse;
   const titleNorm = brief.titleNorm;
+  const nLines = sec.lines.length;
+  const closing = sec.kind === "chorus"; // a closing role: the chorus's last line comes home
+  let titleTop = null;
   sec.lines.forEach((ln, li) => {
     const syls = syllabify(ln.text);
     if (!syls.length) return;
     // a line gets more bars when its syllables would crowd the type's density ceiling (design consequence, reported)
     const needBars = Math.ceil(syls.length / (brief.density[1] * 0.9));
     let lslot = Math.max(slot, needBars * barLen);
-    if (syls.length + 2 > lslot) lslot += barLen;
+    if (syls.length + 3 > lslot) lslot += barLen;
     if (lslot > slot) section.grown = Math.max(section.grown || 0, lslot / barLen);
     // title-first: find the title in this line
     let peak = -1, money = -1;
-    const words = syls.map((s) => s.word).join(" ");
+    const words = syls.map((x) => x.word).join(" ");
     const isTitle = role === "hook" && titleNorm && ` ${words} `.includes(` ${titleNorm} `);
     if (isTitle) {
       const tw = titleNorm.split(" ");
       const start = words.split(" ").findIndex((_, i, arr) => arr.slice(i, i + tw.length).join(" ") === titleNorm);
       let wi = -1; const idx = [];
-      syls.forEach((s, i) => { if (s.part === 0) wi++; if (wi >= start && wi < start + tw.length) idx.push(i); });
+      syls.forEach((x, i) => { if (x.part === 0) wi++; if (wi >= start && wi < start + tw.length) idx.push(i); });
       peak = idx.find((i) => syls[i].stress > 0 && !syls[i].reduced) ?? idx[0];
       const stressed = idx.filter((i) => syls[i].stress > 0);
       money = stressed.length ? stressed[stressed.length - 1] : idx[idx.length - 1];
     }
-    const rh = lineRhythm(syls, lslot, r, { money: isTitle ? money : -1, placement: isTitle ? row.placement : null, beatsPerBar: brief.beatsPerBar, noiseSeed: rhythmSeed });
+    // the plan: this line's letter; the same words again are an exact repeat (only the title's words recur exactly)
+    const same = section.lines.find((x) => x.words === words);
+    const letter = same ? same.letter : form[li % form.length];
+    const source = same || section.lines.find((x) => x.letter === letter) || (ref && ref.lines[li]) || null;
+    let rh = null, how = "new";
+    if (same) { rh = same.rhythm.map((x, i) => ({ ...x, syl: syls[i] })); how = "repeat"; }
+    else if (source && !isTitle) { rh = fitCell(source.rhythm, syls, lslot, brief.beatsPerBar); how = rh ? "fitted" : "refused"; }
+    if (!rh) {
+      // a new letter's rhythm from the vocabulary; a placement that clusters with a built cell gives way
+      const built = section.lines.map((x) => x.rhythm);
+      let tries = 0;
+      do {
+        const style = isTitle ? "walk" : STYLES[Math.floor(r() * STYLES.length)];
+        rh = lineRhythm(syls, lslot, r, { money: isTitle ? money : -1, placement: isTitle ? row.placement : null, beatsPerBar: brief.beatsPerBar, style });
+        tries++;
+      } while (rh && tries < 4 && !source && built.some((b) => onsetSimilarity(b, rh) >= 0.8));
+    }
     if (!rh) { section.unbuildable = true; return; }
-    const letter = form[li % form.length];
-    const refLine = ref && ref.lines[li] ? ref.lines[li] : section.lines.find((x) => x.letter === letter.replace("'", ""));
+    // the answered pair (27.20 §2): the line before the midpoint ends open; a closing role's last line on the tonic
+    const endWant = li === Math.ceil(nLines / 2) - 1 && nLines >= 4 ? "open" : closing && li === nLines - 1 ? "tonic" : null;
+    const dirs = source && how !== "repeat" ? source.dirs : null;
     const lineNotes = [];
     rh.forEach((n, i) => {
       const onset = t + n.onset;
       const chord = chordAt(section, onset, key);
       const strong = onset % 2 === 0;
+      const frac = rh.length > 1 ? i / (rh.length - 1) : 0;
+      // Window 25: the line peaks early (17% of the way in) and descends; the last word held low
+      const contour = frac < 0.2 ? 3 : 3 - 4.5 * ((frac - 0.2) / 0.8);
       let res;
-      if (refLine && refLine.notes[i] && !(isTitle && (i === peak || i === money))) {
-        // varied return: keep the reference contour, refit to the chord on strong beats
-        const target = refLine.notes[i].p + (prev !== null && refLine.notes[i - 1] ? 0 : 0);
-        const near = cands.filter((p) => Math.abs(p - target) <= 2 && (prev === null || Math.abs(p - prev) <= row.maxLeap) && !(run >= row.mono && p === prev));
-        const pc = (p) => ((p - key.tonic) % 12 + 12) % 12;
-        const fit = strong ? near.filter((p) => chord.tones.includes(pc(p))) : near;
-        const pool = fit.length ? fit : near.length ? near : cands;
-        const pp = pool.reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a));
-        res = { p: pp, bits: 1.0 + (pp === target ? 0 : 1) };
+      if (how === "repeat") {
+        res = { p: same.notes[i] ? same.notes[i].p : prev, bits: 1 };
       } else if (isTitle && i === peak) {
         // the high note on the peak syllable, top of the hook tessitura, on a hook degree
         const topT = voice.floor + range * row.hook.tess[1];
         const want = row.hookDegrees.map((d) => (d === 8 ? 1 : d));
-        let opts = cands.filter((p) => want.includes(degreeOf(p, key)) && p <= topT + 2 && p >= topT - 5);
-        if (row.hook.pass === "cross") { const above = cands.filter((p) => want.includes(degreeOf(p, key)) && p > voice.brk); if (above.length) opts = above; }
+        let optsP = cands.filter((p) => want.includes(degreeOf(p, key)) && p <= topT + 2 && p >= topT - 5);
+        if (row.hook.pass === "cross") { const above = cands.filter((p) => want.includes(degreeOf(p, key)) && p > voice.brk); if (above.length) optsP = above; }
         const leapy = plan.leapRule;
-        const pool = opts.filter((p) => prev === null || (Math.abs(p - prev) <= row.maxLeap && (!leapy || p - prev >= Math.max(5, row.hookLeap))));
-        const pp = pool.length ? pick(r, pool) : opts.length ? pick(r, opts) : choosePitch(r, { prev, prev2, cands, chord, strong, center: topT, sd, maxLeap: row.maxLeap, key }).p;
+        const pool = optsP.filter((p) => prev === null || (Math.abs(p - prev) <= row.maxLeap && (!leapy || p - prev >= Math.max(5, row.hookLeap))));
+        const pp = pool.length ? pick(r, pool) : optsP.length ? pick(r, optsP) : choosePitch(r, { prev, prev2, cands, chord, strong, center: topT, sd, maxLeap: row.maxLeap, key }).p;
         res = { p: pp, bits: 4.5 };
+        titleTop = Math.max(titleTop ?? 0, pp);
       } else if (isTitle && i === money) {
         // the money syllable: a stable degree at or below the current pitch, held
         const stable = cands.filter((p) => [1, 3, 5].includes(degreeOf(p, key)) && (prev === null || (p <= prev && prev - p <= row.maxLeap)));
@@ -353,7 +485,9 @@ function buildSection(sec, plan, r, brief, ref) {
         res = { p: pp, bits: 1.5 };
       } else {
         const bias = isTitle && peak >= 0 && i > peak ? 0.8 : 0;
-        res = choosePitch(r, { prev, prev2, cands, chord, strong, center: center + (offsets[letter[0]] || 0), sd, maxLeap: row.maxLeap, endLine: i === rh.length - 1, key, bias, run, runLimit: row.mono });
+        const last = i === rh.length - 1;
+        res = choosePitch(r, { prev, prev2, cands, chord, strong, center: center + (offsets[letter.toLowerCase()] || 0) + contour, sd, maxLeap: row.maxLeap, endLine: last, key, bias, run, runLimit: row.mono,
+          endWant: last && !(isTitle && i === money) ? endWant : null, ceiling: titleTop ?? undefined, dirWant: dirs && (i === 1 || i === 2) ? dirs[i - 1] : undefined, frac });
       }
       if (!res) { section.unbuildable = true; return; }
       const ivNow = prev === null ? 0 : res.p - prev;
@@ -363,10 +497,12 @@ function buildSection(sec, plan, r, brief, ref) {
       run = prev === res.p ? run + 1 : 1;
       prev2 = prev; prev = res.p;
     });
-    section.lines.push({ letter: letter.replace("'", ""), notes: lineNotes, text: ln.text, start: t, slot: lslot });
+    const dirsOut = lineNotes.length > 2 ? [Math.sign(lineNotes[1].p - lineNotes[0].p), Math.sign(lineNotes[2].p - lineNotes[1].p)] : [0, 0];
+    section.lines.push({ letter, how, words, rhythm: rh.map((x) => ({ syl: x.syl, onset: x.onset, dur: x.dur })), dirs: dirsOut, notes: lineNotes, text: ln.text, start: t, slot: lslot });
     section.notes.push(...lineNotes);
     t += lslot;
   });
+  section.form = section.lines.map((l) => l.letter).join("");
   if (sec.kind === "chorus") addMelisma(section, r, key, cands);
   section.length = t;
   section.bars = Math.ceil(t / barLen);
@@ -383,14 +519,16 @@ export function addMelisma(section, r, key, cands) {
     const out = [];
     l.notes.forEach((n, i) => {
       const lineEnd = i === l.notes.length - 1;
-      const eligible = n.dur >= 3 && !n.money && !(li === lastLine && lineEnd) && !n.melisma;
-      const rate = lineEnd ? 0.17 : 0.12;
+      // a note a quarter or longer can carry the turn; the rates are set so the hook's share of
+      // syllables with two notes lands near Table G's 0.12 overall and 0.17 at line ends
+      const eligible = n.dur >= 2 && !n.money && !(li === lastLine && lineEnd) && !n.melisma;
+      const rate = lineEnd ? 0.34 : 0.3;
       if (eligible && r() < rate) {
         const idx = cands.indexOf(n.p);
         const down = r() < 0.75;
         const p2 = idx < 0 ? n.p : down ? cands[Math.max(0, idx - 1)] : cands[Math.min(cands.length - 1, idx + 1)];
         if (p2 !== n.p) {
-          const second = n.dur >= 4 ? 2 : 1;
+          const second = n.dur >= 4 ? 2 : 1; if (n.dur - second < 1) { out.push(n); return; }
           out.push({ ...n, dur: n.dur - second, slurStart: true });
           out.push({ ...n, p: p2, onset: n.onset + n.dur - second, dur: second, melisma: true, slurEnd: true, stress: 0, peak: false, money: false });
           return;
@@ -436,7 +574,9 @@ export function buildCandidate(brief, seed, idx) {
   const L = loops[idx % 8];
   // The writer's chosen harmony is used unchanged; without one the candidates spread across eight loop pairs.
   const loop = brief.harmony ? { ...brief.harmony } : { verse: L.verse, chorus: L.hook };
-  const plan = { loop, loopIndex: brief.harmony ? null : idx % 8, form: pick(r, FORMS), leapRule: r() < 0.5 };
+  const family = brief.calibration === "folk" || brief.calibration === "hymn" ? "folk" : "pop";
+  const forms = { verse: drawForm(r, family), prechorus: drawForm(r, family), chorus: drawForm(r, family), bridge: "ABCD" };
+  const plan = { loop, loopIndex: brief.harmony ? null : idx % 8, forms, form: forms.chorus.split(""), leapRule: r() < 0.5 };
   const built = new Map();
   const out = [];
   const lastChorus = brief.sections.map((s) => s.kind).lastIndexOf("chorus");
