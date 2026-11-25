@@ -413,7 +413,8 @@ export function loopFor(loops, kind) {
 export function makeBrief(song, lyricText) {
   const c = song.contract || {};
   const key = parseKey(c.key);
-  const vname = voiceRow(c.voice, (song.type || "").split("/")[0]);
+  // the contract's voice row; an older free-text voice is read with the key note beside it ("clear female voice")
+  const vname = VOICES[c.voice] ? c.voice : voiceRow(`${c.voice || ""} ${c.voiceChar || ""} ${c.key || ""}`, (song.type || "").split("/")[0]);
   const base = (song.type || "P").split("/")[0];
   const row = TABLE_A[base] || TABLE_A.P;
   const sections = parseSheet(lyricText);

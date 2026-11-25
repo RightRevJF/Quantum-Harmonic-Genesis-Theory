@@ -252,8 +252,18 @@ function viewSong() {
       ui.showManifest ? h("dl", {}, m.items.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])) : null,
     ),
     ui.error ? h("p", { class: "alert", role: "status", text: ui.error }) : null,
+    !ui.busy && lastChoice(s),
     ui.busy ? busyCard() : body(s, result),
   );
+}
+
+// "You chose": the last answer, shown on the next screen so a tap is never in doubt.
+function lastChoice(s) {
+  if (!["triage", "confirm", "intake", "tension", "contract", "harmony", "lyric", "production"].includes(s.step)) return null;
+  const e = [...(s.log || [])].reverse().find((x) => x.answer && !["Search", "Document", "Ask"].includes(x.id));
+  if (!e) return null;
+  const ans = String(e.answer).length > 160 ? String(e.answer).slice(0, 157) + "…" : String(e.answer);
+  return h("p", { class: "lastchoice" }, h("span", { class: "label", text: "You chose" }), h("span", { text: ans }));
 }
 
 function busyCard() {
@@ -280,9 +290,16 @@ function textAnswer(id, placeholder, value, onSubmit, label = "Continue", rows =
     ta, h("button", { class: "btn primary", type: "submit" }, label));
 }
 
+// Show the tap: the chosen option lights up with a check, the others dim, then the step moves on.
+function pickFlash(btn, then) {
+  const list = btn.closest(".options");
+  if (list) list.querySelectorAll(".option").forEach((o) => { o.classList.add(o === btn ? "chosen" : "dim"); o.disabled = true; });
+  const mark = document.createElement("span"); mark.className = "chosenmark"; mark.textContent = "✓ Selected"; btn.append(mark);
+  setTimeout(then, 450);
+}
 function optionList(options, recommended, onPick) {
   return h("div", { class: "options" }, options.map((o, i) =>
-    h("button", { class: "option" + (i === recommended ? " rec" : ""), onclick: () => onPick(i) },
+    h("button", { class: "option" + (i === recommended ? " rec" : ""), onclick: (e) => pickFlash(e.currentTarget, () => onPick(i)) },
       h("span", { class: "letter", text: String.fromCharCode(65 + i) }),
       h("span", { class: "otext", text: o }),
       i === recommended ? h("span", { class: "recmark", text: "Recommended" }) : null)));
@@ -414,7 +431,7 @@ async function checkpointA(s) {
   try {
     const r = await askJSON(P.checkpointAPrompt(s), "Checkpoint (a): tension, hook, form");
     s.tension = { statement: r.tension, hooks: r.hooks || [], recommended: r.recommended ?? 0, form: r.form, formWhy: r.formWhy };
-    s.defaults = { voice: r.voice, bpm: r.bpm, feel: r.feel, key: r.key, objects: (r.objects || []).join(", ") };
+    s.defaults = { voiceChar: r.voice, voice: Mel.VOICES[r.voiceRow] ? r.voiceRow : Mel.voiceRow(`${r.voice || ""} ${r.key || ""}`, (s.type || "").split("/")[0]), bpm: r.bpm, feel: r.feel, key: r.key, objects: (r.objects || []).join(", "), neverSay: r.neverSay || "" };
     s.lastRule = "Principle 3, hook 4-9 syllables";
     save(); render();
   } catch { /* retry on the card */ }
@@ -448,7 +465,7 @@ function pickHook(s, title, fromList) {
   s.contract.title = title;
   if (t.form && !s.contract.form) s.contract.form = t.form;
   const d = s.defaults || {};
-  for (const k of ["voice", "bpm", "feel", "key", "objects"]) if (d[k] && !s.contract[k]) s.contract[k] = d[k];
+  for (const k of ["voice", "voiceChar", "bpm", "feel", "key", "objects", "neverSay"]) if (d[k] && !s.contract[k]) s.contract[k] = d[k];
   logChoice(s, { id: "Hook", question: "Which hook should carry the song?", options: (t.hooks || []).map((x) => x.title), recommended: t.hooks && t.hooks[t.recommended] ? t.hooks[t.recommended].title : null, answer: title + (fromList ? "" : " (writer's own)") });
   s.step = "contract"; save(); render();
 }
@@ -464,7 +481,7 @@ function stepContract(s) {
     e.preventDefault();
     const fd = new FormData(form);
     const get = (k) => String(fd.get(k) || "").trim();
-    const next = { ...c, title: get("title"), neverSay: get("neverSay"), objects: get("objects"), writerPhrases: get("writerPhrases"), voice: get("voice"), feel: get("feel"), key: get("key"), form: get("form"), writer: get("writer"),
+    const next = { ...c, title: get("title"), neverSay: get("neverSay"), objects: get("objects"), writerPhrases: get("writerPhrases"), voice: get("voice"), voiceChar: get("voiceChar"), feel: get("feel"), key: get("key"), form: get("form"), writer: get("writer"),
       bpm: Number(get("bpm")) || 80, beatsPerBar: Number(get("beatsPerBar")) || 4, barsPerLine: Number(get("barsPerLine")) || 2 };
     const missing = [];
     if (!next.title) missing.push("title");
@@ -476,11 +493,12 @@ function stepContract(s) {
     s.step = "harmony"; save(); render(); window.scrollTo(0, 0);
   } },
     f("title", "Title", c.title, { required: true }),
-    f("neverSay", "Never-say list", c.neverSay, {}, "Words or phrases this song must never use, separated by commas. Write 'none' to waive it."),
+    f("neverSay", "Never-say list", c.neverSay, {}, "Words or phrases this song must never use, separated by commas (drafted from your answer to what the song must not say). Write 'none' to waive it."),
     f("objects", "Objects of the story", c.objects, {}, "The things in the song. They count as pictures and are never flagged as rare."),
     f("writerPhrases", "Your phrases", c.writerPhrases, {}, "Wording you want kept exactly. Lines carrying it are exempt from the word rules."),
     h("div", { class: "grid2" },
-      f("voice", "Voice", c.voice, { placeholder: "e.g. male, weathered" }),
+      voiceSelect(c),
+      f("voiceChar", "Voice character", c.voiceChar || (Mel.VOICES[c.voice] ? "" : c.voice), { placeholder: "e.g. clear, weathered" }),
       f("key", "Key", c.key, { placeholder: "e.g. G major" }),
       f("bpm", "Tempo (BPM)", c.bpm, { type: "number", min: "40", max: "220", inputmode: "numeric" }),
       f("feel", "Feel", c.feel, { placeholder: "slow burn, driving…" }),
@@ -492,6 +510,14 @@ function stepContract(s) {
     h("button", { class: "btn primary", type: "submit" }, s.lyric ? "Save and measure" : claudeReady() ? "Save and draft the lyric" : "Save and write the lyric"),
   );
   return card("The contract · Protocol 0b", "Check the required inputs.", "The writing room doesn't open while one is empty. Your never-say list is a hard rule: any line using it is flagged.", form);
+}
+
+const NOTE = (m) => `${["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"][m % 12]}${Math.floor(m / 12) - 1}`;
+const VOICE_LABEL = { male: "Male (pop)", female: "Female (pop)", "male worship": "Male worship leader", "female worship": "Female worship leader", "male gospel": "Male gospel lead", "female gospel": "Female gospel lead", anthemic: "Rock anthem (male)", congregational: "Congregation", bass: "Bass / baritone" };
+function voiceSelect(c) {
+  const cur = Mel.VOICES[c.voice] ? c.voice : Mel.voiceRow(`${c.voice || ""} ${c.voiceChar || ""} ${c.key || ""}`);
+  const sel = h("select", { id: "c-voice", name: "voice" }, Object.entries(Mel.VOICES).map(([k, v]) => { const o = h("option", { value: k, text: `${VOICE_LABEL[k] || k}: ${NOTE(v.floor)}–${NOTE(v.ceil)}` }); if (k === cur) o.selected = true; return o; }));
+  return h("label", { class: "field", for: "c-voice" }, h("span", { text: "Voice (range)" }), sel, h("small", { text: "The melody is written for this range (Module 11.2)." }));
 }
 
 function lyricOptions(s) {
@@ -509,17 +535,6 @@ async function draft(s) {
 
 function readingsText(result) {
   return result.findings.map((f) => `- [${f.level}] ${f.rule}${f.where && f.where.section ? ` (${f.where.section}${f.where.line ? " line " + f.where.line : ""})` : ""}: ${f.message}`).join("\n") || "No readings.";
-}
-
-async function revise(s, note, result) {
-  try {
-    const text = await askText(P.revisePrompt(s, s.lyric, readingsText(result), note), "Revising the lyric");
-    if (text) {
-      s.lyric = cleanLyric(text); s.drafts.push({ text: s.lyric, at: Date.now(), by: "engine revision", note });
-      logChoice(s, { id: "Revise", question: "Revision note", answer: note || "(fix what the readings flag)" });
-      save(); render();
-    }
-  } catch { /* shown */ }
 }
 
 async function coach(s, f, result) {
@@ -550,6 +565,90 @@ function replaceLine(s, original, replacement) {
 
 const LEVEL_NAME = { floor: "Floor", flag: "Flag", info: "Note" };
 
+// ---------- the lyric workshop ----------
+// Plain-words help for every reading: why it matters, and what kind of fix it takes.
+const RULE_HELP = [
+  ["Weak line ending", "line", "The last word of a line is where a listener feels it land. A small word there (the, it, and, of) leaves the line hanging. Real lyrics end that way only 5% of the time."],
+  ["Rule V1", "line", "Verses work through pictures: something the listener can see, touch, smell or hear. A line with no picture, and none beside it, tells instead of shows."],
+  ["Mouth test: density", "line", "Too many syllables for the time the line has: past what a singer can articulate."],
+  ["Mouth test: friction", "line", "Lots of syllables and hard consonants close together. It will feel crowded in the mouth at this tempo."],
+  ["Mouth test: consonant cluster", "line", "Where one word ends on consonants and the next starts with them, the tongue has to work. Four in a row is noticeable but common; five is a tongue-twister. Often fine to keep."],
+  ["Rare word", "line", "A word most people rarely hear. Listeners get one pass, so a rare word can stop them. Keep it if it is the point."],
+  ["Never-say", "line", "This word or phrase is on your own never-say list."],
+  ["Rule V2: verse line length", "section", "Verse lines usually run 6 to 9 syllables. This is information about pace, not a rule to obey."],
+  ["Rule V2: verse entropy", "section", "When every pair of verse lines has exactly the same count, the verse can sound like a chant. Speech varies a little; letting one line run a syllable longer keeps it conversational. Optional."],
+  ["Rule C1: chorus lines shorter", "section", "Choruses usually have shorter, punchier lines than verses (about 7 against 8 syllables). Short lines are easier for a room to sing and make the chorus lift. Longer chorus lines can work, but they feel wordier."],
+  ["Rule C1: mirror", "section", "Paired chorus lines that match in length sing on the same melody shape, which makes the chorus easier to learn."],
+  ["Rule C2", "section", "The last word of the chorus is the held note. It sings best on an open vowel (oh, ah) or an L or R sound, and on one syllable if possible."],
+  ["Held-note vowel", "section", "Notes that are held sound best on open vowels. Close vowels (ee, oo) are harder to sustain and project."],
+  ["Rhyme floor", "section", "Nearly half of real line endings rhyme with a line nearby. A block with no rhyme at all, full or loose, can feel unanchored."],
+  ["Bridge length", "section", "The bridge is the most exposed moment: four lines at most, plain and heavy."],
+  ["Final chorus singable", "section", "The final chorus is sung on the same melody, so each line needs about the same number of syllables as the first chorus."],
+  ["Rule C3", "section", "The listener should always know whose interior they are in. A switch between I and he/she between verse and chorus can blur that."],
+  ["Title in the hook position", "song", "The title works hardest as the first or last line of the chorus."],
+  ["Title count", "song", "Real songs say the title 2 to 9 times; hits about 6."],
+  ["Hook length", "song", "The hook line is easiest to remember at 4 to 9 syllables."],
+  ["Chorus entropy", "song", "Choruses repeat their own words more than verses do; that repetition is what people remember."],
+  ["The ladder line", "song", "Hit lyrics now and then put a thing and a feeling in the same line (the door and the longing). Optional."],
+  ["Address", "song", "How much the song says 'you'. Information only."],
+  ["Chorus block size", "section", "Real chorus blocks run 4 to 8 lines. Information only."],
+];
+function helpFor(f) { return RULE_HELP.find(([k]) => f.rule.startsWith(k)) || [f.rule, f.where && f.where.line ? "line" : "section", ""]; }
+const findingKey = (f) => `${f.rule}|${f.where ? `${f.where.section || ""}|${f.where.line || ""}|${f.where.text || ""}` : ""}`;
+
+function numberedLyric(text) { return text.split("\n").map((l, i) => `L${i + 1}: ${l}`).join("\n"); }
+
+async function propose(s, instruction, label) {
+  const result = analyzeLyric(s.lyric, lyricOptions(s));
+  try {
+    const r = await askJSON(P.changesPrompt(s, numberedLyric(s.lyric), readingsText(result), instruction), label || "Working out changes");
+    const lines = s.lyric.split("\n");
+    const kindAt = (n) => { for (let i = n - 1; i >= 0; i--) { const m = lines[i].trim().match(/^\[(.+)\]$/); if (m) return /chorus/i.test(m[1]) ? "chorus" : /verse/i.test(m[1]) ? "verse" : "other"; } return "verse"; };
+    const changes = (r.changes || []).filter((c) => Number.isInteger(c.line) && c.line >= 1 && c.line <= lines.length && lines[c.line - 1].trim() && !/^\[.*\]$/.test(lines[c.line - 1].trim()) && c.new && c.new.trim() !== lines[c.line - 1].trim())
+      .map((c) => { const nw = c.new.replace(/[.,;:]+$/, "").trim(); return { line: c.line, old: lines[c.line - 1], new: nw, why: c.why || "", accept: true, m: measureCandidate(nw, kindAt(c.line), lyricOptions(s)) }; });
+    ui.proposal = { instruction, summary: r.summary || "", changes };
+    render();
+    setTimeout(() => { const el = $("#proposal"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50);
+  } catch { /* shown */ }
+}
+
+function applyProposal(s) {
+  const pr = ui.proposal;
+  if (!pr) return;
+  const lines = s.lyric.split("\n");
+  let applied = 0;
+  pr.changes.filter((c) => c.accept).forEach((c) => {
+    if (lines[c.line - 1] === c.old) { lines[c.line - 1] = c.new + (/\s>\s*$/.test(c.old) ? " >" : ""); applied++; }
+  });
+  if (applied) {
+    s.lyric = lines.join("\n");
+    s.drafts.push({ text: s.lyric, at: Date.now(), by: "workshop", note: pr.instruction });
+    logChoice(s, { id: "Revise", question: `Workshop: ${pr.instruction}`, answer: `${applied} of ${pr.changes.length} changes applied: ${pr.changes.filter((c) => c.accept).map((c) => `"${c.old.trim()}" -> "${c.new}"`).join("; ")}` });
+  }
+  ui.proposal = null;
+  save(); render();
+}
+
+async function askEngine(s, question, key) {
+  const result = analyzeLyric(s.lyric, lyricOptions(s));
+  try {
+    const r = await askJSON(P.askPrompt(s, s.lyric, readingsText(result), question), "Thinking about your question");
+    ui.answers = ui.answers || {};
+    ui.answers[key || "ask"] = { q: question, a: r.answer || "" };
+    logChoice(s, { id: "Ask", question, answer: r.answer || "" });
+    save(); render();
+  } catch { /* shown */ }
+}
+
+const QUICK = [
+  ["Fix the floors and flags", "Fix what the readings mark as floors and flags, starting with the floors. Change as little as possible."],
+  ["Vary the second chorus", "Vary the second chorus lightly so it returns changed: change one or two lines, keep the title line and the last line exactly as they are."],
+  ["Vary the second pre-chorus", "Vary the second pre-chorus lightly: change one or two lines so it moves the story on, keeping its shape and rhyme."],
+  ["Tighten the chorus lines", "Make the chorus lines shorter and punchier (about 7 syllables), keeping the title line and the last line."],
+  ["Ease the mouth-test notes", "Rewrite only the lines the mouth test marks (consonant clusters, crowded lines) so they sing more easily, keeping their meaning."],
+  ["More pictures in the verses", "Make the verse lines more concrete: things you can see, touch or hear, in the song's own world."],
+];
+
 function stepLyric(s, result) {
   const ta = h("textarea", { id: "lyric", class: "lyricbox", rows: "18", spellcheck: "true", placeholder: "[Verse 1]\n…\n\n[Chorus]\n…" });
   ta.value = s.lyric || "";
@@ -558,8 +657,9 @@ function stepLyric(s, result) {
     clearTimeout(t);
     t = setTimeout(() => { s.lyric = ta.value; save(); renderReadings(s); }, 500);
   });
-  const noteBox = h("textarea", { id: "revnote", rows: "2", placeholder: "Your note: what to change (or leave empty to fix the floors and flags)" });
-
+  const noteBox = h("textarea", { id: "revnote", rows: "2", placeholder: "Your own note, e.g. \"make the bridge less certain\"" });
+  const askBox = h("input", { id: "askbox", placeholder: "e.g. Is it a problem that my chorus lines are long?" });
+  const ans = ui.answers && ui.answers.ask;
   const editor = h("section", { class: "card" },
     h("p", { class: "eyebrow", text: `Checkpoint (c) · Lyric skeleton · ${s.drafts.length} draft${s.drafts.length === 1 ? "" : "s"} kept` }),
     h("h2", { class: "q", text: s.lyric ? "Edit freely. The readings update as you type." : claudeReady() ? "Draft the lyric, or write it yourself." : "Write the lyric. The readings update as you type." }),
@@ -568,9 +668,40 @@ function stepLyric(s, result) {
       claudeReady() && !s.lyric ? h("button", { class: "btn primary", onclick: () => draft(s) }, "Draft it from my answers") : null,
       s.drafts.length > 1 ? h("button", { class: "btn", onclick: () => { s.drafts.pop(); s.lyric = s.drafts[s.drafts.length - 1].text; save(); render(); } }, "Undo last change") : null,
     ),
-    claudeReady() && s.lyric ? h("div", { class: "revise" }, noteBox, h("button", { class: "btn", onclick: () => revise(s, noteBox.value.trim(), analyzeLyric(s.lyric, lyricOptions(s))) }, "Revise with Claude")) : null,
   );
-  return h("div", { class: "stack" }, editor, h("div", { id: "readings" }, readingsView(s, result)));
+  const workshop = claudeReady() && s.lyric ? h("section", { class: "card" },
+    h("p", { class: "eyebrow", text: "Ask Claude for changes" }),
+    h("p", { class: "help", text: "Claude proposes changes line by line, each with its reason and its new readings. You choose which to keep. Nothing in your lyric changes until you tap Apply." }),
+    h("div", { class: "chips" }, QUICK.map(([label, instr]) => h("button", { class: "chip", onclick: () => propose(s, instr, label) }, label))),
+    h("div", { class: "revise" }, noteBox, h("button", { class: "btn", onclick: () => { const v = noteBox.value.trim(); if (v) propose(s, v, "Working on your note"); else noteBox.focus(); } }, "Propose changes for my note")),
+    h("p", { class: "eyebrow", text: "Ask the engine a question" }),
+    h("p", { class: "help", text: "Answers in plain words. Your lyric is not touched." }),
+    h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); const q = askBox.value.trim(); if (q) askEngine(s, q, "ask"); } }, askBox, h("button", { class: "btn", type: "submit" }, "Ask")),
+    ans ? h("div", { class: "answerbox" }, h("p", { class: "label", text: ans.q }), h("p", { text: ans.a })) : null,
+  ) : null;
+  return h("div", { class: "stack" }, editor, proposalCard(s), workshop, h("div", { id: "readings" }, readingsView(s, result)));
+}
+
+function proposalCard(s) {
+  const pr = ui.proposal;
+  if (!pr) return null;
+  const n = pr.changes.filter((c) => c.accept).length;
+  return h("section", { class: "card proposal", id: "proposal" },
+    h("p", { class: "eyebrow", text: "Proposed changes · review each one" }),
+    h("p", { class: "help", text: pr.summary || "" }),
+    pr.changes.length ? h("ol", { class: "changes" }, pr.changes.map((c, i) => {
+      const box = h("input", { type: "checkbox", id: "chg-" + i }); box.checked = c.accept;
+      box.addEventListener("change", () => { c.accept = box.checked; render(); });
+      return h("li", { class: "change" + (c.accept ? "" : " off") },
+        h("label", { class: "check", for: "chg-" + i }, box, h("span", { text: c.accept ? "Keep this change" : "Skip this change" })),
+        h("p", { class: "old", text: c.old.trim() }),
+        h("p", { class: "new", text: c.new }),
+        h("p", { class: "fine", text: `${c.why ? c.why + " · " : ""}${c.m.syllables} syllables · ${c.m.notes.length ? c.m.notes.join(", ") : "clears the line rules"}` }));
+    })) : h("p", { text: "No changes proposed." }),
+    h("div", { class: "row wrap" },
+      pr.changes.length ? h("button", { class: "btn primary", disabled: n ? null : true, onclick: () => applyProposal(s) }, `Apply ${n} change${n === 1 ? "" : "s"}`) : null,
+      h("button", { class: "btn ghost", onclick: () => { ui.proposal = null; render(); } }, "Discard")),
+  );
 }
 
 function renderReadings(s) {
@@ -583,21 +714,54 @@ function renderReadings(s) {
   if (head) head.textContent = m.head;
 }
 
+function findingItem(s, f, result, opts = {}) {
+  const lvl = f.level;
+  const [, scope, why] = helpFor(f);
+  const key = findingKey(f);
+  const isKept = (s.constraints || []).some((k) => k.startsWith(f.rule) && (f.where && f.where.text ? k.includes(f.where.text) : f.where && f.where.section ? k.includes(`in ${f.where.section}`) : true));
+  const canClaude = claudeReady();
+  const hasLine = f.where && f.where.line;
+  const ans = ui.answers && ui.answers[key];
+  const where = f.where && f.where.section ? `${f.where.section}${f.where.line ? ", line " + f.where.line : ""}${f.where.text ? ": " + f.where.text : ""}` : "The whole song";
+  return h("li", { class: "finding " + lvl + (isKept ? " kept" : "") + (opts.next ? " next" : "") },
+    h("p", { class: "fhead" }, h("span", { class: "lvl", text: opts.next ? "Next best fix" : LEVEL_NAME[lvl] }), h("span", { text: f.rule.replace(/\s*\(.*\)$/, "") })),
+    h("p", { class: "fwhere", text: where }),
+    h("p", { class: "fmsg", text: f.message }),
+    why ? h("p", { class: "fwhy", text: why }) : null,
+    f.fix ? h("p", { class: "ffix", text: `Try: ${f.fix}` }) : null,
+    ans ? h("div", { class: "answerbox" }, h("p", { text: ans.a })) : null,
+    h("div", { class: "row wrap" },
+      canClaude && hasLine ? h("button", { class: "btn small primary", onclick: () => coach(s, f, result) }, "3 ways to fix this line") : null,
+      canClaude && !hasLine && scope !== "song" ? h("button", { class: "btn small primary", onclick: () => propose(s, `Fix only this reading, changing as few lines as possible: ${f.rule} in ${f.where && f.where.section ? f.where.section : "the song"}. ${f.message} ${f.fix || ""}`, "Suggesting a fix") }, "Suggest a fix") : null,
+      canClaude && scope === "song" ? h("button", { class: "btn small primary", onclick: () => propose(s, `Address this reading, changing as few lines as possible: ${f.rule}. ${f.message} ${f.fix || ""}`, "Suggesting a fix") }, "Suggest a fix") : null,
+      canClaude ? h("button", { class: "btn small", onclick: () => askEngine(s, `In plain words: what does this reading mean for my song, and is it a real problem here? "${f.rule}: ${f.message}"${f.where && f.where.text ? ` (the line: "${f.where.text}")` : ""}`, key) }, "Is this a problem?") : null,
+      (lvl === "floor" || lvl === "flag") && !isKept ? h("button", { class: "btn small ghost", onclick: () => {
+        s.constraints.push(`${f.rule}: kept on purpose${f.where && f.where.text ? `: "${f.where.text}"` : f.where && f.where.section ? ` in ${f.where.section}` : ""}`);
+        logChoice(s, { id: "Keep", question: `Keep as written (${f.rule})`, answer: f.where && f.where.text ? f.where.text : f.where && f.where.section ? f.where.section : "the song" });
+        save(); render();
+      } }, "Keep it as written") : null,
+      lvl === "info" ? h("button", { class: "btn small ghost", onclick: () => { s.hidden = [...(s.hidden || []), key]; save(); render(); } }, "Hide") : null,
+      isKept ? h("span", { class: "keptmark", text: "Kept as written" }) : null,
+    ));
+}
+
 function readingsView(s, result) {
   if (!result || !result.sections.length) return h("p", { class: "empty", text: "The readings appear here once there are lines to measure." });
   s.lastRule = "the floor (mouth test, endings, pictures, chorus)";
   const { summary, metrics } = result;
+  const hidden = new Set(s.hidden || []);
   const chips = h("div", { class: "summary" },
     h("span", { class: "pill floor" + (summary.floors ? "" : " zero"), text: `${summary.floors} floor` }),
     h("span", { class: "pill flag" + (summary.flags ? "" : " zero"), text: `${summary.flags} flag${summary.flags === 1 ? "" : "s"}` }),
     h("span", { class: "pill info", text: `${summary.infos} note${summary.infos === 1 ? "" : "s"}` }));
+  const legend = h("p", { class: "fine", text: "Floor: must be fixed or kept on purpose before you lock. Flag: worth a look. Note: information only, often fine to keep." });
 
   const lineView = h("div", { class: "lines" }, result.sections.filter((x) => !x.ref).map((sec) =>
     h("div", { class: "sec" },
       h("p", { class: "secname", text: `${sec.name}${sec.rhyme ? " · rhyme " + sec.rhyme.scheme : ""}` }),
       sec.lines.map((l, i) => {
         const pct = Math.min(100, (l.sps / BANDS.sps.p99) * 100);
-        const hits = result.findings.filter((f) => f.where && f.where.section === sec.name && f.where.line === i + 1);
+        const hits = result.findings.filter((f) => f.where && f.where.section === sec.name && f.where.line === i + 1 && !hidden.has(findingKey(f)));
         const worst = hits.find((f) => f.level === "floor") ? "floor" : hits.find((f) => f.level === "flag") ? "flag" : hits.length ? "info" : "ok";
         return h("div", { class: "ln " + worst },
           h("span", { class: "syl", title: "syllables", text: String(l.syllables) }),
@@ -609,29 +773,23 @@ function readingsView(s, result) {
         );
       }))));
 
-  const findings = h("ol", { class: "findings" }, ["floor", "flag", "info"].flatMap((lvl) => result.findings.filter((f) => f.level === lvl).map((f) => {
-    const canCoach = claudeReady() && f.where && f.where.line && (lvl === "floor" || lvl === "flag");
-    const isKept = (s.constraints || []).some((k) => k.startsWith(f.rule) && f.where && f.where.text && k.includes(f.where.text));
-    return h("li", { class: "finding " + lvl + (isKept ? " kept" : "") },
-      h("p", { class: "fhead" }, h("span", { class: "lvl", text: LEVEL_NAME[lvl] }), h("span", { text: f.rule })),
-      f.where && f.where.section ? h("p", { class: "fwhere", text: `${f.where.section}${f.where.line ? ", line " + f.where.line : ""}${f.where.text ? ": " + f.where.text : ""}` }) : null,
-      h("p", { class: "fmsg", text: f.message }),
-      f.fix ? h("p", { class: "ffix", text: f.fix }) : null,
-      h("div", { class: "row wrap" },
-        canCoach ? h("button", { class: "btn small", onclick: () => coach(s, f, result) }, "Coach this line") : null,
-        lvl === "floor" && f.where && f.where.text && !isKept ? h("button", { class: "btn small ghost", onclick: () => {
-          s.constraints.push(`${f.rule}: kept on purpose: "${f.where.text}"`);
-          logChoice(s, { id: "Keep", question: `Keep a line the engine flagged (${f.rule})`, answer: f.where.text });
-          save(); render();
-        } }, "Keep it on purpose") : null,
-        isKept ? h("span", { class: "keptmark", text: "Kept on purpose" }) : null,
-      ));
-  })));
+  const isKeptF = (f) => (s.constraints || []).some((k) => k.startsWith(f.rule));
+  const ordered = ["floor", "flag", "info"].flatMap((lvl) => result.findings.filter((f) => f.level === lvl));
+  const visible = ordered.filter((f) => !hidden.has(findingKey(f)));
+  const next = visible.find((f) => (f.level === "floor" || f.level === "flag") && !isKeptF(f));
+  const rest = visible.filter((f) => f !== next);
+  const important = rest.filter((f) => f.level !== "info"), notes = rest.filter((f) => f.level === "info");
+  const findings = h("div", { class: "stack" },
+    important.length ? h("ol", { class: "findings" }, important.map((f) => findingItem(s, f, result))) : null,
+    notes.length ? h("details", { class: "notesgroup", open: ui.notesOpen ? true : null, ontoggle: (e) => { ui.notesOpen = e.target.open; } },
+      h("summary", { text: `Notes: information only (${notes.length})` }),
+      h("ol", { class: "findings" }, notes.map((f) => findingItem(s, f, result)))) : null);
 
   const coachCard = ui.coach ? h("section", { class: "card coach" },
-    h("p", { class: "eyebrow", text: `Coach · ${ui.coach.section}, line ${ui.coach.line}` }),
+    h("p", { class: "eyebrow", text: `3 ways to fix · ${ui.coach.section}, line ${ui.coach.line}` }),
     h("p", { class: "orig", text: ui.coach.original }),
-    h("div", { class: "options" }, ui.coach.alts.map((a, i) => h("button", { class: "option", onclick: () => { if (replaceLine(s, ui.coach.original, a.text)) { ui.coach = null; save(); render(); } } },
+    h("p", { class: "help", text: "Tap one to put it in your lyric. Each shows its own readings." }),
+    h("div", { class: "options" }, ui.coach.alts.map((a, i) => h("button", { class: "option", onclick: (e) => { pickFlash(e.currentTarget, () => { if (replaceLine(s, ui.coach.original, a.text)) { ui.coach = null; save(); render(); } }); } },
       h("span", { class: "letter", text: String.fromCharCode(65 + i) }),
       h("span", { class: "otext" }, a.text, h("small", { class: "candnote", text: ` ${a.m.syllables} syllables · ${a.m.notes.length ? a.m.notes.join(", ") : "clears the line rules"}` }))))),
     h("button", { class: "link", onclick: () => { ui.coach = null; render(); } }, "Keep my line")) : null;
@@ -645,9 +803,10 @@ function readingsView(s, result) {
 
   return h("div", { class: "stack" },
     coachCard,
+    next ? h("section", { class: "card" }, h("ol", { class: "findings" }, findingItem(s, next, result, { next: true }))) : null,
     h("section", { class: "card" },
       h("p", { class: "eyebrow", text: "The readings · information, not verdicts" }),
-      chips,
+      chips, legend,
       h("dl", { class: "metrics" },
         metric("Verse line", metrics.verseLen ? `${metrics.verseLen} syl` : "—", "real 8.2, hits 8.7"),
         metric("Chorus line", metrics.chorusLen ? `${metrics.chorusLen} syl` : "—", "real 7.0"),
@@ -658,13 +817,16 @@ function readingsView(s, result) {
       ),
       lineView,
     ),
-    h("section", { class: "card" }, h("p", { class: "eyebrow", text: "What to look at" }), result.findings.length ? findings : h("p", { text: "Nothing to report. Every line clears the floor." })),
+    h("section", { class: "card" }, h("p", { class: "eyebrow", text: "Everything else to look at" }),
+      rest.length ? findings : h("p", { text: next ? "Nothing else." : "Nothing to report. Every line clears the floor." }),
+      hidden.size ? h("button", { class: "link", onclick: () => { s.hidden = []; save(); render(); } }, `Show ${hidden.size} hidden note${hidden.size === 1 ? "" : "s"}`) : null),
     h("section", { class: "card lock" },
       h("h2", { class: "q", text: "Lock the lyric" }),
-      h("p", { class: "help", text: openFloors.length ? `${openFloors.length} floor reading${openFloors.length > 1 ? "s are" : " is"} still open. Fix ${openFloors.length > 1 ? "them" : "it"}, or keep a line on purpose; the choice goes into the record.` : "The floor is clear. Locking keeps this draft as the song's lyric and opens the melody search." }),
+      h("p", { class: "help", text: openFloors.length ? `${openFloors.length} floor reading${openFloors.length > 1 ? "s are" : " is"} still open. Fix ${openFloors.length > 1 ? "them" : "it"}, or keep a line as written; the choice goes into the record.` : "The floor is clear. Locking keeps this draft as the song's lyric and opens the melody search." }),
       lockBtn),
   );
 }
+
 function metric(k, v, note) { return h("div", { class: "metric" }, h("dt", { text: k }), h("dd", {}, h("b", { text: v }), h("small", { text: note }))); }
 
 async function completion(s) {

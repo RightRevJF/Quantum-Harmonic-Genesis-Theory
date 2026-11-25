@@ -103,3 +103,10 @@ test("melisma (27.12): turns in the hook only, a step away, never on the held ti
   assert.ok(turns > 0, "some turns are written");
   assert.ok(down / turns >= 0.5, `mostly down (${down}/${turns})`);
 });
+
+test("the voice row: a picked row is used as is; an older free-text voice reads the key note", () => {
+  const b1 = M.makeBrief({ type: "P", contract: { voice: "female", key: "A major" } }, "[Verse]\nla la la la");
+  assert.equal(b1.voiceName, "female");
+  const b2 = M.makeBrief({ type: "P", contract: { voice: "Clear, steady, bright", key: "A major (clear female voice)" } }, "[Verse]\nla la la la");
+  assert.equal(b2.voiceName, "female");
+});

@@ -35,7 +35,7 @@ function record(s) {
   if (c.neverSay) lines.push(`NEVER-SAY: ${c.neverSay}`);
   if (c.objects) lines.push(`OBJECTS OF THE STORY: ${c.objects}`);
   if (c.writerPhrases) lines.push(`WRITER'S PHRASES (use as written): ${c.writerPhrases}`);
-  if (c.voice) lines.push(`VOICE: ${c.voice}`);
+  if (c.voice) lines.push(`VOICE: ${c.voice}${c.voiceChar ? ` (${c.voiceChar})` : ""}`);
   if (c.bpm) lines.push(`TEMPO: ${c.bpm} BPM, ${c.feel || ""}`);
   if (c.key) lines.push(`KEY: ${c.key}`);
   if (c.form) lines.push(`FORM: ${c.form}`);
@@ -80,10 +80,10 @@ ${typeText(s.type).slice(0, 14000)}
 === SESSION RECORD ===
 ${record(s)}
 
-Propose: the tension in one sentence; three hook lines (each a title in 4-9 syllables, different in kind); a form for this type with a one-line reason; and defaults the writer can change: voice (one phrase), tempo in BPM with the feel, key, and three to six concrete objects from the writer's own answers.
+Propose: the tension in one sentence; three hook lines (each a title in 4-9 syllables, different in kind); a form for this type with a one-line reason; and defaults the writer can change: the voice's character (one phrase), the voice row from Module 11.2 (exactly one of: male, female, male worship, female worship, male gospel, female gospel, anthemic, congregational, bass; read it from the writer's answers, e.g. a "clear female voice" is female), tempo in BPM with the feel, key, three to six concrete objects from the writer's own answers, and the never-say list: the words and phrases the writer's "must not sound like, say, or feel" answer rules out, written as a comma list of concrete words and phrases (for example "little green men, flying saucer"). If the writer gave no such answer, write "none".
 
 Return JSON only:
-{"tension": "...", "hooks": [{"title": "...", "why": "under 15 words"}, {...}, {...}], "recommended": 0, "form": "V-PC-C-V-PC-C-B-C", "formWhy": "...", "voice": "...", "bpm": 76, "feel": "...", "key": "...", "objects": ["...", "..."]}`;
+{"tension": "...", "hooks": [{"title": "...", "why": "under 15 words"}, {...}, {...}], "recommended": 0, "form": "V-PC-C-V-PC-C-B-C", "formWhy": "...", "voice": "...", "voiceRow": "female", "bpm": 76, "feel": "a few words", "key": "A major", "objects": ["...", "..."], "neverSay": "word, phrase, phrase"}`;
 }
 
 function lyricRules() {
@@ -111,7 +111,7 @@ ${typeText(s.type)}
 ${record(s)}
 
 ${STYLE}
-Output only the lyric sheet. Mark every section with a header line in square brackets, like [Verse 1], [Pre-Chorus], [Chorus], [Bridge]. Write every chorus out in full each time it is sung (the final chorus may be the inversion: same melody, new knowledge). Mark a deliberate build line by ending it with " >". No commentary before or after.`;
+Output only the lyric sheet. Mark every section with a header line in square brackets, like [Verse 1], [Pre-Chorus], [Chorus], [Bridge]. Write every chorus out in full each time it is sung (the final chorus may be the inversion: same melody, new knowledge). Mark a deliberate build line by ending it with " >". Never write tags such as [HOLD] inside a line. No commentary before or after.`;
 }
 
 export function revisePrompt(s, lyric, readings, note) {
@@ -177,4 +177,48 @@ Tension: ${(s.tension && s.tension.statement) || ""}
 ${lyric}
 
 Return JSON only: {"delivers": "yes" | "partly" | "no", "reading": "two or three sentences", "lost": "what was lost, or empty"}`;
+}
+
+// The workshop: Claude proposes line-by-line changes; the writer accepts or rejects each.
+export function changesPrompt(s, numbered, readings, instruction) {
+  return `You are running Luthier v45's lyric workshop. The writer will review every change you propose and accept or reject each one, so propose only what the instruction asks for, as few lines as possible, keeping each changed line's kernel and the song's voice. Lines listed as constraints in force are never changed. A line the writer has already rewritten by hand is theirs: change it only if the instruction names it.
+
+${lyricRules().slice(0, 9000)}
+
+=== SESSION RECORD ===
+${record(s)}
+
+=== THE LYRIC, LINES NUMBERED ===
+${numbered}
+
+=== ENGINE READINGS (information, not verdicts) ===
+${readings}
+
+=== THE INSTRUCTION ===
+${instruction}
+
+Rules: replace whole lines only, by their number; never change a section header; keep lines singable at the same melody length (within one syllable unless the instruction asks otherwise); never write tags like [HOLD]; plain text, no punctuation at line ends.
+Return JSON only: {"summary": "one or two sentences in plain words: what you changed and why", "changes": [{"line": 12, "new": "the new line", "why": "under 15 words"}]}
+If nothing should change, return {"summary": "why not", "changes": []}.`;
+}
+
+export function askPrompt(s, lyric, readings, question) {
+  return `You are Luthier v45, a songwriting engine, answering the writer's question about their lyric. Answer in plain words for a songwriter, in three to six sentences, using the spec's evidence where it helps. Say clearly whether something is a real problem for this song or just information. Do not rewrite the lyric; you may quote a line and suggest what to try.
+
+=== CORE RULES (excerpt) ===
+${SPEC.lyric.slice(0, 7000)}
+
+=== SESSION RECORD ===
+${record(s)}
+
+=== THE LYRIC ===
+${lyric}
+
+=== ENGINE READINGS ===
+${readings}
+
+=== THE QUESTION ===
+${question}
+
+Return JSON only: {"answer": "..."}`;
 }

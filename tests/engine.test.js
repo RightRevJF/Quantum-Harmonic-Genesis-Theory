@@ -132,3 +132,9 @@ test("triage routes an anthem and drops it for one voice", () => {
 test("every triage option names or keeps at least one type", () => {
   for (const q of QUESTIONS) for (const o of q.options) assert.ok((o.keep || []).length + (o.name || []).length > 0, `${q.id}: ${o.text}`);
 });
+
+test("performance tags inside a line are not words", () => {
+  const r = analyzeLyric("[Chorus]\nHello is anybody there [HOLD]\nI send it out into the air\nHello is anybody there (hold)\nI'm calling anyone hello", { title: "Hello is anybody there" });
+  assert.ok(!r.sections[0].lines.some((l) => /hold/i.test(l.words.join(" "))));
+  assert.equal(r.metrics.titleCount, 2);
+});

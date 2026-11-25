@@ -100,7 +100,8 @@ export function tokenize(line) {
 }
 
 function stripMarks(line) {
-  return line.replace(/\s*>\s*$/, "").replace(/^\s*\(aside\)\s*/i, "").trim();
+  // performance tags such as [HOLD] or (hold) inside a line are notes to the singer, not words
+  return line.replace(/\s*>\s*$/, "").replace(/^\s*\(aside\)\s*/i, "").replace(/\s*\[(?:hold|held|x\d+|repeat|ad lib)[^\]]*\]/gi, "").replace(/\s*\((?:hold|held|x\d+|repeat)\)/gi, "").replace(/\s*>\s*$/, "").trim();
 }
 
 export function parseSheet(text) {

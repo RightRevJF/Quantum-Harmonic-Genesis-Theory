@@ -209,6 +209,22 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .arcfill { display: block; height: 100%; background: var(--brass); }
 .arcdyn { font: 600 0.75rem var(--mono); color: var(--muted); }
 .mini li.warn { color: var(--flag); }
+.option.chosen { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent) inset; }
+.option.chosen .letter { background: var(--accent); color: var(--accent-ink); }
+.option.dim { opacity: 0.45; }
+.option:disabled { cursor: default; }
+.chosenmark { grid-column: 2; font: 600 0.75rem var(--mono); color: var(--accent); letter-spacing: 0.04em; }
+.lastchoice { display: grid; gap: 2px; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 6px; font-size: 0.9rem; }
+.proposal { border-color: var(--accent); }
+.changes { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.change { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px dotted var(--line); }
+.change.off { opacity: 0.5; }
+.change .old { font-family: var(--mono); font-size: 0.88rem; color: var(--muted); text-decoration: line-through; }
+.change .new { font-family: var(--mono); font-size: 0.95rem; color: var(--ink); font-weight: 600; }
+.answerbox { background: var(--info-soft); border-radius: 8px; padding: 10px 12px; display: grid; gap: 4px; }
+.fwhy { color: var(--muted); font-size: 0.9rem; }
+.finding.next { border-left-width: 5px; }
+.finding.next .lvl { color: var(--accent); }
 details summary { cursor: pointer; color: var(--accent); font-weight: 500; padding: 4px 0; }
 .status { font: 0.75rem var(--mono); color: var(--muted); text-align: center; padding: 0 16px 24px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
