@@ -391,7 +391,7 @@ export function refBits(prevIv, iv) {
 }
 
 // ---------- build one candidate ----------
-function buildSection(sec, plan, r, brief, ref) {
+function buildSection(sec, plan, r, brief, ref, refMode = null) {
   const { key, voice, row } = brief;
   const range = voice.ceil - voice.floor;
   const role = sec.kind === "chorus" ? "hook" : "verse";
@@ -436,12 +436,24 @@ function buildSection(sec, plan, r, brief, ref) {
       money = stressed.length ? stressed[stressed.length - 1] : idx[idx.length - 1];
     }
     // the plan: this line's letter; the same words again are an exact repeat (only the title's words recur exactly)
+    const refLine = ref && ref.lines[li] ? ref.lines[li] : null;
+    if (refMode === "return" && refLine && refLine.words === words) {
+      // the returning section's unchanged line: its notes exactly, turns and all
+      const copied = refLine.notes.map((n) => ({ ...n, onset: n.onset - refLine.start + t, line: li }));
+      section.lines.push({ ...refLine, notes: copied, start: t, slot: refLine.slot, how: "repeat", fixed: true });
+      section.notes.push(...copied);
+      if (copied.length) { prev = copied[copied.length - 1].p; prev2 = copied.length > 1 ? copied[copied.length - 2].p : prev; }
+      if (refLine.notes.some((n) => n.peak)) titleTop = Math.max(titleTop ?? 0, ...refLine.notes.filter((n) => n.peak).map((n) => n.p));
+      t += refLine.slot;
+      return;
+    }
     const same = section.lines.find((x) => x.words === words);
-    const letter = same ? same.letter : form[li % form.length];
-    const source = same || section.lines.find((x) => x.letter === letter) || (ref && ref.lines[li]) || null;
+    const letter = same ? same.letter : refMode === "return" && refLine ? refLine.letter : form[li % form.length];
+    const source = same || (refMode === "return" && refLine) || section.lines.find((x) => x.letter === letter) || refLine || null;
+    const follow = refMode === "return" && refLine && !same ? refLine : null;
     let rh = null, how = "new";
     if (same) { rh = same.rhythm.map((x, i) => ({ ...x, syl: syls[i] })); how = "repeat"; }
-    else if (source && !isTitle) { rh = fitCell(source.rhythm, syls, lslot, brief.beatsPerBar); how = rh ? "fitted" : "refused"; }
+    else if (source && (!isTitle || follow)) { rh = fitCell(source.rhythm, syls, lslot, brief.beatsPerBar); how = rh ? (follow ? "follows" : "fitted") : "refused"; }
     if (!rh) {
       // a new letter's rhythm from the vocabulary; a placement that clusters with a built cell gives way
       const built = section.lines.map((x) => x.rhythm);
@@ -467,6 +479,16 @@ function buildSection(sec, plan, r, brief, ref) {
       let res;
       if (how === "repeat") {
         res = { p: same.notes[i] ? same.notes[i].p : prev, bits: 1 };
+      } else if (follow && follow.notes.length) {
+        // the same melody under new words: each note near the first time's, refit to the chord on strong beats
+        const fn = follow.notes.filter((x) => !x.melisma);
+        const target = fn[Math.min(fn.length - 1, Math.round((i * (fn.length - 1)) / Math.max(1, rh.length - 1)))].p;
+        const pc = (p) => ((p - key.tonic) % 12 + 12) % 12;
+        const near = cands.filter((p) => Math.abs(p - target) <= 2 && (prev === null || Math.abs(p - prev) <= row.maxLeap) && !(run >= row.mono && p === prev));
+        const fit = strong ? near.filter((p) => chord.tones.includes(pc(p))) : near;
+        const pool = fit.length ? fit : near.length ? near : cands.filter((p) => prev === null || Math.abs(p - prev) <= row.maxLeap);
+        const pp = (pool.length ? pool : cands).reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a));
+        res = { p: pp, bits: 1 + (pp === target ? 0 : 1) };
       } else if (isTitle && i === peak) {
         // the high note on the peak syllable, top of the hook tessitura, on a hook degree
         const topT = voice.floor + range * row.hook.tess[1];
@@ -516,6 +538,7 @@ function buildSection(sec, plan, r, brief, ref) {
 export function addMelisma(section, r, key, cands) {
   const lastLine = section.lines.length - 1;
   section.lines.forEach((l, li) => {
+    if (l.fixed) return; // a copied line keeps its own turns
     const out = [];
     l.notes.forEach((n, i) => {
       const lineEnd = i === l.notes.length - 1;
@@ -583,8 +606,11 @@ export function buildCandidate(brief, seed, idx) {
   brief.sections.forEach((s, si) => {
     const keyName = s.kind + ":" + s.lines.map((l) => l.text).join("|");
     if (built.has(keyName)) { out.push({ ...built.get(keyName), name: s.name, repeat: true }); return; }
-    const sameKind = out.find((x) => x.kind === s.kind && !x.repeat);
-    const sec = buildSection(s, { ...plan, last: si === lastChorus }, r, brief, sameKind && s.kind === "verse" ? sameKind : null);
+    // a section that returns: verses keep the stanza principle (the first verse's cells under new
+    // pitches); a chorus, pre-chorus or bridge that returns with some words changed keeps its melody
+    // (Rule C4: the same melody each time, the final chorus the inversion)
+    const sameKind = out.find((x) => x.kind === s.kind && !x.repeat && !x.unbuildable);
+    const sec = buildSection(s, { ...plan, last: si === lastChorus }, r, brief, sameKind || null, sameKind ? (s.kind === "verse" ? "stanza" : "return") : null);
     built.set(keyName, sec);
     out.push(sec);
   });

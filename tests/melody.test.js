@@ -150,3 +150,17 @@ test("the chorus's last line comes home to the tonic (27.20's answered pair)", a
   }
   assert.ok(home / total > 0.8, `${home}/${total}`);
 });
+
+test("Rule C4: a chorus that returns with changed words keeps its melody", async () => {
+  const lyric = LYRIC + `\n\n[Chorus]\nI kept the house but lost the home\nThe lights are low and I'm alone\nI kept the house but lost the home\nEvery room an echo of you though`;
+  const b = M.makeBrief(song("V"), lyric);
+  for (let i = 0; i < 20; i++) {
+    const c = M.buildCandidate(b, 77, i);
+    const ch = c.sections.filter((s) => s.kind === "chorus");
+    const first = ch[0], final = ch[ch.length - 1];
+    assert.equal(final.repeat, undefined, "the final chorus is built, not a plain repeat");
+    // unchanged lines are copied note for note
+    [0, 2, 3].forEach((li) => assert.deepEqual(final.lines[li].notes.map((n) => n.p), first.lines[li].notes.map((n) => n.p), `line ${li + 1}`));
+    assert.notEqual(final.lines[1].how, "new", "the changed line follows the first chorus");
+  }
+});
