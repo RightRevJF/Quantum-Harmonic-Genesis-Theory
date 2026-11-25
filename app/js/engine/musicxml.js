@@ -64,7 +64,8 @@ function measureNotes(evs, b, rec, opts) {
       const [type, dot] = TYPE[v];
       const tieStart = i < pieces.length - 1 || e.tieOut, tieStop = i > 0 || e.tieIn;
       const ties = `${tieStop ? '<tie type="stop"/>' : ""}${tieStart ? '<tie type="start"/>' : ""}`;
-      const tied = tieStop || tieStart ? `<notations>${tieStop ? '<tied type="stop"/>' : ""}${tieStart ? '<tied type="start"/>' : ""}</notations>` : "";
+      const slurS = e.slurStart && i === 0 && !e.tieIn, slurE = e.slurEnd && i === pieces.length - 1 && !e.tieOut;
+      const tied = tieStop || tieStart || slurS || slurE ? `<notations>${tieStop ? '<tied type="stop"/>' : ""}${tieStart ? '<tied type="start"/>' : ""}${slurS ? '<slur type="start" number="1"/>' : ""}${slurE ? '<slur type="stop" number="1"/>' : ""}</notations>` : "";
       // beam eighths in pairs within a beat
       const beam = v === 1 ? (start % 2 === 0 ? "begin" : "end") : null;
       const pitches = e.drum ? e.drum : e.ps;
@@ -85,6 +86,7 @@ function measureNotes(evs, b, rec, opts) {
 
 function syllables(rec) {
   return rec.melody.map((n) => {
+    if (n.melisma) return null;
     let w = n.word || n.syl || "";
     if (/^i($|')/.test(w)) w = "I" + w.slice(1);
     if (n.lineStart && w) w = w[0].toUpperCase() + w.slice(1);
@@ -106,7 +108,7 @@ export function musicXml(rec) {
   const parts = [];
   parts.push({ id: "P1", name: "Voice", abbr: "Vo.", program: (arr.layers.find((l) => l.kind === "fill") || { gm: 73 }).gm, channel: 1,
     clef: rec.male ? '<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>' : '<clef><sign>G</sign><line>2</line></clef>',
-    voices: [{ events: rec.melody.map((n, i) => ({ t: n.t, dur: n.dur, ps: [n.p], lyric: sy[i] })) }], chords: true, marks: true });
+    voices: [{ events: rec.melody.map((n, i) => ({ t: n.t, dur: n.dur, ps: [n.p], lyric: sy[i], slurStart: n.slurStart, slurEnd: n.slurEnd })) }], chords: true, marks: true });
   let ch = 2;
   arr.layers.forEach((ly, i) => {
     const id = `P${i + 2}`;

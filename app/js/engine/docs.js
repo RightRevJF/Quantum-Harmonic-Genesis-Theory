@@ -216,9 +216,12 @@ function voiceBars(events, rec, opts = {}) {
         const tie = i < pieces.length - 1 || e.tieOut ? "-" : "";
         // beam eighths within a beat: no space unless the note ends on a beat
         const end = pstart + x; pstart = end;
-        out += prefix() + note + DUR_OK[x] + tie + (end % 2 === 0 || x >= 2 ? " " : "");
+        const slurOpen = e.slurStart && i === 0 && !e.cont ? "(" : "";
+        const slurClose = e.slurEnd && i === pieces.length - 1 && !e.tieOut ? ")" : "";
+        out += prefix() + slurOpen + note + DUR_OK[x] + tie + slurClose + (end % 2 === 0 || x >= 2 ? " " : "");
         if (opts.lyrics && !e.slash) {
-          if (i === 0 && !e.cont) {
+          if (i === 0 && !e.cont && e.melisma) words.push("_");
+          else if (i === 0 && !e.cont) {
             if (e.word) {
               let w = /^i($|')/.test(e.word) ? "I" + e.word.slice(1) : e.word;
               if (e.lineStart) w = w[0].toUpperCase() + w.slice(1);
@@ -260,7 +263,7 @@ function voiceData(rec, arr, id, inScore = false, top = false) {
   const ann = !inScore || top ? ann0 : null;
   const perc = { K: "F", S: "c", H: "!style=x!g", C: "!style=x!a" };
   if (id === "voice") {
-    const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, ps: [n.p], syl: n.syl, word: n.word, part: n.part, of: n.of, lineStart: n.lineStart }));
+    const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, ps: [n.p], syl: n.syl, word: n.word, part: n.part, of: n.of, lineStart: n.lineStart, melisma: n.melisma, slurStart: n.slurStart, slurEnd: n.slurEnd }));
     return [{ v: "V", name: "Voice", clef: rec.male ? "treble-8" : "treble", data: voiceBars(melodyEvents, rec, { lyrics: true, chords: chords0, annotations: ann }) }];
   }
   const li = arr.layers.findIndex((l) => l.id === id);

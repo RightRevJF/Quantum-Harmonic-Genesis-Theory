@@ -52,11 +52,12 @@ export function floorReport(cand, brief, lyricResult) {
   const totalBars = t / barLen;
 
   // --- alignment (Window 30, Finding 1) ---
-  const strong = notes.filter((n) => strongPos.includes(n.onset % barLen));
+  const syl = notes.filter((n) => !n.melisma); // one entry per sung syllable
+  const strong = syl.filter((n) => strongPos.includes(n.onset % barLen));
   const stressedStrong = strong.length ? strong.filter((n) => n.stress > 0).length / strong.length : 1;
-  const unstressed = notes.filter((n) => !(n.stress > 0));
+  const unstressed = syl.filter((n) => !(n.stress > 0));
   const unstressedStrong = unstressed.length ? unstressed.filter((n) => strongPos.includes(n.onset % barLen)).length / unstressed.length : 0;
-  const held = notes.filter((n) => n.dur >= 2);
+  const held = syl.filter((n) => n.dur >= 2);
   const reducedHeld = held.length ? held.filter((n) => n.reduced).length / held.length : 0;
   const lines = [];
   cand.sections.filter((s) => !s.repeat).forEach((sec) => sec.lines.forEach((l) => lines.push({ sec, l })));
@@ -81,9 +82,9 @@ export function floorReport(cand, brief, lyricResult) {
     if (n.dur >= 4 || gap >= 1) { phrases.push(cur); cur = []; }
   });
   if (cur.length) phrases.push(cur);
-  const pSyl = phrases.map((p) => p.length);
+  const pSyl = phrases.map((p) => p.filter((n) => !n.melisma).length);
   const pBeats = phrases.map((p) => (p[p.length - 1].t + p[p.length - 1].dur - p[0].t) / 2);
-  const longSyl = phrases.filter((p) => p.length > TABLE_G.phraseSyllables.p95);
+  const longSyl = phrases.filter((p) => p.filter((n) => !n.melisma).length > TABLE_G.phraseSyllables.p95);
   const longBeat = phrases.filter((p, i) => pBeats[i] > TABLE_G.phraseBeats.p95);
   const longest = phrases.reduce((a, p, i) => (pBeats[i] > a.b ? { b: pBeats[i], p } : a), { b: 0, p: null });
   add({ group: "Breath", name: "Syllables per phrase", value: `median ${median(pSyl)}, longest ${Math.max(...pSyl)}`, band: "real median 4, p95 15", level: longSyl.length ? "floor" : "pass",
@@ -92,7 +93,8 @@ export function floorReport(cand, brief, lyricResult) {
     where: longBeat.length ? `${longBeat[0][0].section}, bar ${Math.floor(longBeat[0][0].t / barLen) + 1}` : null, fix: "Give the singer a breath: a rest of half a beat inside the phrase." });
 
   // --- melisma (Finding 3) ---
-  add({ group: "Melisma", name: "Syllables with two or more notes", value: "0.00", band: "real 0.122 (line ends 0.169)", level: "info", note: "This app writes one note a syllable; the two-note turn on held syllables (27.12) is not written yet." });
+  const turns = notes.filter((n) => n.melisma).length;
+  add({ group: "Melisma", name: "Syllables with two or more notes", value: r2(syl.length ? turns / syl.length : 0), band: "real 0.122 (line ends 0.169); the hook carries it, the verse none", level: "info" });
 
   // --- cadence (Finding 4) ---
   const firstOf = (kind) => cand.sections.find((s) => s.kind === kind && !s.repeat);
@@ -129,7 +131,7 @@ export function floorReport(cand, brief, lyricResult) {
   // --- density on the pick's own onsets (Window 36) ---
   const sps = lines.filter(({ l }) => l.notes.length > 1).map(({ sec, l }) => {
     const span = (l.notes[l.notes.length - 1].onset - l.notes[0].onset) * beatSec / 2;
-    return { s: span > 0 ? (l.notes.length - 1) / span : 0, sec: sec.name, text: l.text };
+    return { s: span > 0 ? (l.notes.filter((n) => !n.melisma).length - 1) / span : 0, sec: sec.name, text: l.text };
   });
   const fast = sps.filter((x) => x.s > SPS.p99);
   add({ group: "Density", name: "Syllables a second on the melody", value: `median ${r2(median(sps.map((x) => x.s)))}, fastest ${r2(Math.max(0, ...sps.map((x) => x.s)))}`, band: "real median 2.48, p95 4.76, ceiling 6.4", level: fast.length ? "flag" : "info", where: fast.length ? `${fast[0].sec}: ${fast[0].text}` : null });

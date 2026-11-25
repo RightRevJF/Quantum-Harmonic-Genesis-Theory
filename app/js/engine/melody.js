@@ -367,9 +367,40 @@ function buildSection(sec, plan, r, brief, ref) {
     section.notes.push(...lineNotes);
     t += lslot;
   });
+  if (sec.kind === "chorus") addMelisma(section, r, key, cands);
   section.length = t;
   section.bars = Math.ceil(t / barLen);
   return section;
+}
+
+// 27.12 / Table G: after the hook is written one note per syllable, held lyric-bearing notes
+// receive a two-note turn at the corpus rates (0.17 at line ends, 0.12 inside a line), a step
+// down three times in four. The second note carries no syllable and is slurred in every document.
+// The title's held note and the chorus's last word keep their one note (Rule C2's held word).
+export function addMelisma(section, r, key, cands) {
+  const lastLine = section.lines.length - 1;
+  section.lines.forEach((l, li) => {
+    const out = [];
+    l.notes.forEach((n, i) => {
+      const lineEnd = i === l.notes.length - 1;
+      const eligible = n.dur >= 3 && !n.money && !(li === lastLine && lineEnd) && !n.melisma;
+      const rate = lineEnd ? 0.17 : 0.12;
+      if (eligible && r() < rate) {
+        const idx = cands.indexOf(n.p);
+        const down = r() < 0.75;
+        const p2 = idx < 0 ? n.p : down ? cands[Math.max(0, idx - 1)] : cands[Math.min(cands.length - 1, idx + 1)];
+        if (p2 !== n.p) {
+          const second = n.dur >= 4 ? 2 : 1;
+          out.push({ ...n, dur: n.dur - second, slurStart: true });
+          out.push({ ...n, p: p2, onset: n.onset + n.dur - second, dur: second, melisma: true, slurEnd: true, stress: 0, peak: false, money: false });
+          return;
+        }
+      }
+      out.push(n);
+    });
+    l.notes = out;
+  });
+  section.notes = section.lines.flatMap((l) => l.notes);
 }
 
 const FORMS = [["a", "a'", "b", "c"], ["a", "b", "a'", "c"], ["a", "a'", "b", "a'"], ["a", "b", "a", "b'"], ["a", "a'", "b", "b'"]];

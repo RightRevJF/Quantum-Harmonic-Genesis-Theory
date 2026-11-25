@@ -95,7 +95,7 @@ Tests: `npm test` (Node 20 or later).
 - **The harmony model.** It is a first-order chord model over the loops Window 28 lists, not the spec's corpus-trained model, so the expectation medians are this model's own. The total budget counts each section's design once (repeats are not recharged), plus melodic and rhythmic events of 2 DU or more. One-DU melodic and rhythmic moves count only against the per-moment ceiling. This is the app's reading of 19.9.
 - **Meditative songs.** Table A has no Meditative row, so these are read against W-contemplative.
 - **Rhythm.** Each line's rhythm is chosen by a small optimiser that puts stressed syllables on beats 1 and 3 and keeps unstressed ones off them. Lines of the same shape in a section share a rhythm. It aligns more tightly than real songs do (about 0.9 against the real median of 0.78).
-- **Melisma.** None is written yet: one note per syllable. The floor reports it.
+- **Melisma (27.12).** Held chorus notes get a two-note turn at the corpus rates (0.17 at line ends, 0.12 inside a line), a step down three times in four. The verse gets none. The held title note and the chorus's last word keep one note. The second note is slurred, and the lyric holds over it in every document.
 - **Line lengths.** A line gets more bars when its syllables would crowd the type's density ceiling.
 
 ## What comes next
@@ -103,6 +103,6 @@ Tests: `npm test` (Node 20 or later).
 This is stage 6: the session through to a harmonic skeleton, a locked lyric and a chosen melody, with the departure map, the floor on the finished song, the documents and the production notes. Still to come:
 
 - (e) the production notes;
-- the audio demo; melisma; the song cycle (Module 26).
+- the song cycle (Module 26).
 
 Luthier © Jason Bryant 2026.

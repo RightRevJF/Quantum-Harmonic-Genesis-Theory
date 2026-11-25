@@ -78,3 +78,28 @@ test("the hook is written from the title: peak and held money note", async () =>
   assert.ok(money.dur >= 3, "money syllable held 1.5 beats or more");
   assert.ok([1, 3, 5].includes(M.degreeOf(money.p, b.key)), "money note on a stable degree");
 });
+
+test("melisma (27.12): turns in the hook only, a step away, never on the held title or the last word", async () => {
+  const b = M.makeBrief(song("V"), LYRIC);
+  let turns = 0, held = 0, down = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    const res = await M.search(b, { n: 150, seed });
+    res.top.forEach((t) => t.sections.filter((s) => !s.repeat).forEach((s) => {
+      const ms = s.notes.filter((n) => n.melisma);
+      if (s.kind !== "chorus") assert.equal(ms.length, 0, "no melisma outside the hook");
+      s.notes.forEach((n, i) => {
+        if (!n.melisma) { if (s.kind === "chorus" && (n.dur >= 3 || s.notes[i + 1]?.melisma)) held++; return; }
+        const prev = s.notes[i - 1];
+        assert.ok(prev.slurStart && n.slurEnd, "slurred pair");
+        assert.ok(Math.abs(n.p - prev.p) <= 2 && n.p !== prev.p, "a step");
+        assert.ok(!prev.money, "not on the held title note");
+        if (n.p < prev.p) down++;
+        turns++;
+      });
+      const last = s.lines[s.lines.length - 1].notes;
+      if (s.kind === "chorus") assert.ok(!last[last.length - 1].melisma, "the last word keeps one note");
+    }));
+  }
+  assert.ok(turns > 0, "some turns are written");
+  assert.ok(down / turns >= 0.5, `mostly down (${down}/${turns})`);
+});

@@ -70,7 +70,8 @@ function music(events, rec, render, { rest = "r", marks = null, dyn = null } = {
       pieces.forEach((x, i) => {
         let d = "";
         if (dyn && dyn[b] && !e.cont && i === 0) { d = "\\" + dyn[b]; dyn[b] = null; }
-        toks.push(render(e, i === 0) + DUR[x] + d + (i < pieces.length - 1 || e.tieOut ? "~" : ""));
+        const slur = (e.slurStart && i === 0 && !e.cont ? "(" : "") + (e.slurEnd && i === pieces.length - 1 && !e.tieOut ? ")" : "");
+        toks.push(render(e, i === 0) + DUR[x] + d + (i < pieces.length - 1 || e.tieOut ? "~" : "") + slur);
       });
       pos = e.t + e.dur;
     });
@@ -86,6 +87,7 @@ function lyricWord(w) { return /^[A-Za-z]+$/.test(w) ? w : `"${esc(w)}"`; }
 function lyricsFor(rec) {
   const toks = [];
   rec.melody.forEach((n) => {
+    if (n.melisma) return; // the slur carries the syllable over the second note
     let w = n.word || n.syl || "";
     if (/^i($|')/.test(w)) w = "I" + w.slice(1);
     if (n.lineStart && w) w = w[0].toUpperCase() + w.slice(1);
@@ -131,7 +133,7 @@ function variables(rec) {
   const arr = arrangement(rec);
   const marks = marksFor(rec);
   const rel = { pos: 4 * 7 }; // c'
-  const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, p: n.p }));
+  const melodyEvents = rec.melody.map((n) => ({ t: n.t, dur: n.dur, p: n.p, slurStart: n.slurStart, slurEnd: n.slurEnd }));
   const melody = music(melodyEvents, rec, (e) => lyRel(e.p, ks, rel), { marks });
   const absChord = (e) => (e.ps.length > 1 ? `<${e.ps.map((p) => lyAbs(p, ks)).join(" ")}>` : lyAbs(e.ps[0], ks));
   const DR = { K: "bd", S: "sn", H: "hh", C: "cymc" };

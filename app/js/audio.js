@@ -174,7 +174,7 @@ export function midiFromRecord(rec, arr) {
   const lead = (arr.layers.find((l) => l.kind === "fill") || { gm: 73 }).gm;
   const accent = (t) => { const pos = t % rec.barLen; return pos === 0 ? 10 : rec.beatsPerBar === 4 && pos === rec.barLen / 2 ? 5 : pos % 2 ? -8 : 0; };
   const voice = [{ t: 0, o: 0, d: meta(0x03, ascii("Voice (guide)")) }, { t: 0, o: 0, d: [0xc0, lead] }, { t: 0, o: 0, d: [0xb0, 7, 110] }];
-  rec.melody.forEach((n) => { const t = n.t * E, d = Math.max(1, n.dur * E - 20); if (n.word && !n.part) voice.push({ t, o: 1, d: meta(0x05, ascii(n.word)) }); const v = Math.max(1, Math.min(127, 92 + accent(n.t) + (n.stress > 0 ? 6 : 0))); voice.push({ t, o: 2, d: [0x90, n.p, v] }, { t: t + d, o: 0, d: [0x80, n.p, 0] }); });
+  rec.melody.forEach((n) => { const t = n.t * E, d = Math.max(1, n.dur * E - 20); if (n.word && !n.part && !n.melisma) voice.push({ t, o: 1, d: meta(0x05, ascii(n.word)) }); const v = Math.max(1, Math.min(127, 92 + accent(n.t) + (n.stress > 0 ? 6 : 0))); voice.push({ t, o: 2, d: [0x90, n.p, v] }, { t: t + d, o: 0, d: [0x80, n.p, 0] }); });
   tracks.push(voice);
   let ch = 1;
   arr.layers.forEach((ly) => {

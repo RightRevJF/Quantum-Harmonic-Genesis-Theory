@@ -41,7 +41,8 @@ const song = { type, q0: "The year after", harmony: { skel: { verse: ["I", "vi",
 if (/minor/.test(key)) song.harmony.skel = { verse: ["i", "VI", "III", "VII"], chorus: ["VI", "VII", "i", "V"], bridge: ["iv", "VI", "V", "V"] };
 const b = M.makeBrief(song, LYRIC);
 const res = await M.search(b, { n: 400, seed: 3 });
-const rec = D.buildRecord(res.top[0], b, song);
+const pick = res.top.find((t) => t.sections.some((s) => s.notes.some((n) => n.melisma))) || res.top[0];
+const rec = D.buildRecord(pick, b, song);
 writeFileSync(`${out}/lead.ly`, L.leadSheetLy(rec));
 writeFileSync(`${out}/score.ly`, L.scoreAndPartsLy(rec));
 for (const f of ["lead.ly", "score.ly"]) {
