@@ -170,17 +170,22 @@ export function midiFromRecord(rec, arr) {
   const tracks = [];
   tracks.push([{ t: 0, o: 0, d: meta(0x03, ascii(rec.title || "Song")) }, { t: 0, o: 0, d: meta(0x51, [(us >> 16) & 255, (us >> 8) & 255, us & 255]) }, { t: 0, o: 0, d: meta(0x58, [rec.beatsPerBar, 2, 24, 8]) },
     ...rec.sections.map((s) => ({ t: (s.startBar - 1) * rec.barLen * E, o: 0, d: meta(0x06, ascii(s.name)) }))]);
-  const voice = [{ t: 0, o: 0, d: meta(0x03, ascii("Voice")) }, { t: 0, o: 0, d: [0xc0, 52] }];
-  rec.melody.forEach((n) => { const t = n.t * E, d = Math.max(1, n.dur * E - 20); if (n.word && !n.part) voice.push({ t, o: 1, d: meta(0x05, ascii(n.word)) }); voice.push({ t, o: 2, d: [0x90, n.p, 96] }, { t: t + d, o: 0, d: [0x80, n.p, 0] }); });
+  // 9.6: the guide melody is breath-, wood- or string-driven (never choir or pad): the palette's lead
+  const lead = (arr.layers.find((l) => l.kind === "fill") || { gm: 73 }).gm;
+  const accent = (t) => { const pos = t % rec.barLen; return pos === 0 ? 10 : rec.beatsPerBar === 4 && pos === rec.barLen / 2 ? 5 : pos % 2 ? -8 : 0; };
+  const voice = [{ t: 0, o: 0, d: meta(0x03, ascii("Voice (guide)")) }, { t: 0, o: 0, d: [0xc0, lead] }, { t: 0, o: 0, d: [0xb0, 7, 110] }];
+  rec.melody.forEach((n) => { const t = n.t * E, d = Math.max(1, n.dur * E - 20); if (n.word && !n.part) voice.push({ t, o: 1, d: meta(0x05, ascii(n.word)) }); const v = Math.max(1, Math.min(127, 92 + accent(n.t) + (n.stress > 0 ? 6 : 0))); voice.push({ t, o: 2, d: [0x90, n.p, v] }, { t: t + d, o: 0, d: [0x80, n.p, 0] }); });
   tracks.push(voice);
   let ch = 1;
   arr.layers.forEach((ly) => {
     if (ly.kind !== "drums" && ch === 9) ch++;
     const c = ly.kind === "drums" ? 9 : ch++;
     const tr = [{ t: 0, o: 0, d: meta(0x03, ascii(ly.name)) }];
-    if (ly.kind !== "drums") tr.push({ t: 0, o: 0, d: [0xc0 | c, ly.gm || 0] });
+    if (ly.kind !== "drums") tr.push({ t: 0, o: 0, d: [0xc0 | c, ly.gm || 0] }, { t: 0, o: 0, d: [0xb0 | c, 10, { strum: 40, pick: 40, piano: 64, pad: 88, bass: 64, fill: 80 }[ly.kind] ?? 64] }, { t: 0, o: 0, d: [0xb0 | c, 7, ly.kind === "pad" ? 80 : 96] });
     ly.events.forEach((ev) => {
-      const t = ev.t * E, d = Math.max(1, ev.dur * E - 10), v = Math.max(1, Math.min(127, ev.vel || 80));
+      // metric accents (9.3); pads and strings sustain to the bar line, plucked parts stay short
+      const legato = ly.kind === "pad" || ly.kind === "piano";
+      const t = ev.t * E, d = Math.max(1, ev.dur * E - (legato ? 4 : 30)), v = Math.max(1, Math.min(127, (ev.vel || 80) + (ly.kind === "pad" ? 0 : accent(ev.t))));
       const ps = ly.kind === "drums" ? ev.hits.map((h) => DRUM_NOTE[h]) : ly.kind === "bass" ? ev.ps.map((p) => p - 12) : ev.ps;
       ps.forEach((p) => tr.push({ t, o: 2, d: [0x90 | c, p, v] }, { t: t + (ly.kind === "drums" ? 60 : d), o: 0, d: [0x80 | c, p, 0] }));
     });

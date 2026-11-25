@@ -38,6 +38,8 @@ A phone-first web app built from **Luthier v45** (Song Engine MAX) by Jason Brya
     - **Nashville chart (PDF):** with drummer notes.
     - **Songbook (PDF):** for musicians, with no engine terms. It covers the song at a glance, section by section with chords and melody notes by bar, notes for the singer and each player, and the lyric sheet with bar numbers.
 
+    - **MusicXML (.musicxml):** every part, with chord symbols, the lyric, section marks, dynamics and tempo. It validates against the MusicXML 4.0 schema and opens in MuseScore, Sibelius, Finale, Dorico or Logic with real instrument sounds. The bass carries a `<transpose>` so it plays in its real register.
+    - **MIDI (.mid):** one track per instrument with its General MIDI sound and pan. The guide melody uses the palette's lead instrument (9.6: never a choir or pad patch), with metric accents (9.3).
     - **LilyPond file (.ly):** one file holds the lead sheet, the full score and every part, following Module 11. The vocal melody is written with `\relative c'`, a male voice uses `\clef "treble_8"` at sounding pitch, and congregational melody is moved up an octave at the score level. Empty bars are compressed, guitar is written as slashes and drums in `\drummode`. Running `lilypond file.ly` writes seven PDFs and a MIDI file. Check it with `node tools/check_lily.mjs <dir> [type] [key] [voice]`.
 
     The quick PDFs are engraved in the browser with abcjs 6.4.4 and placed into the PDF with jsPDF 2.5.1 (both loaded from jsDelivr). The band parts come from checkpoint (e)'s arrangement (or the type's default palette until it is set).

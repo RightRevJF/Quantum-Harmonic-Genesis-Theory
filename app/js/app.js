@@ -13,6 +13,7 @@ import * as Docs from "./engine/docs.js";
 import * as Pdf from "./pdf.js";
 import * as Lily from "./engine/lily.js";
 import * as Prod from "./engine/production.js";
+import * as MusicXML from "./engine/musicxml.js";
 
 // ---------- tiny DOM helper (all text via textContent) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -941,6 +942,11 @@ function docsCard(s) {
       btn("lead sheet", (r, prog) => Pdf.leadSheetPdf(r, { onProgress: prog }), `${base} - lead sheet.pdf`),
       btn("Nashville chart", (r) => Pdf.chartPdf(r), `${base} - Nashville chart.pdf`),
       btn("songbook", (r) => Pdf.songbookPdf(r, s), `${base} - songbook.pdf`)),
+    h("p", { class: "label", text: "To hear it properly (MusicXML and MIDI)" }),
+    h("p", { class: "fine", text: "Open the MusicXML file in MuseScore (free, musescore.org), Sibelius, Finale, Dorico or Logic: every instrument with its own sound, the lyric, chords and dynamics, all editable. The MIDI file opens in GarageBand, Logic or any DAW, one track per instrument with the right sound." }),
+    h("div", { class: "row wrap" },
+      btn("MusicXML file", (r) => new TextEncoder().encode(MusicXML.musicXml(r)).buffer, `${base}.musicxml`, true),
+      btn("MIDI file", (r) => Audio.midiFromRecord(r, Docs.arrangement(r)), `${base}.mid`)),
     h("p", { class: "label", text: "Print quality (LilyPond)" }),
     h("p", { class: "fine", text: "One LilyPond file holds the lead sheet, the full score and every part, engraved to the spec's notation rules (Module 11). Open it with LilyPond 2.24 or later (free, lilypond.org), or hand it to the engine's pipeline, and it writes each PDF plus a MIDI file." }),
     h("div", { class: "row wrap" }, btn("LilyPond file", (r) => new TextEncoder().encode(Lily.allLy(r)).buffer, `${base} - lead sheet, score and parts.ly`)),

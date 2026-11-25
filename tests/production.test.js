@@ -98,3 +98,24 @@ test("the one-sheet has its five blocks and the songbook carries it", async () =
   assert.ok(ps.mix.length >= 3);
   assert.ok(book.session.chords.length === rec.sections.length);
 });
+
+test("MusicXML: every part, every bar, chords, lyrics; MIDI: a track per instrument", async () => {
+  const { musicXml } = await import("../app/js/engine/musicxml.js");
+  const { midiFromRecord } = await import("../app/js/audio.js");
+  const rec = await recFor("americana");
+  const xml = musicXml(rec);
+  const arr = D.arrangement(rec);
+  const parts = xml.match(/<part id="P\d+">/g) || [];
+  assert.equal(parts.length, arr.layers.length + 1);
+  const firstPart = xml.slice(xml.indexOf('<part id="P1">'), xml.indexOf("</part>"));
+  assert.equal((firstPart.match(/<measure number=/g) || []).length, rec.totalBars);
+  assert.equal((firstPart.match(/<harmony>/g) || []).length, rec.totalBars);
+  assert.ok((firstPart.match(/<lyric /g) || []).length >= rec.melody.length * 0.9);
+  assert.match(xml, /<clef-octave-change>-1<\/clef-octave-change>/, "male voice and guitar clefs");
+  assert.match(xml, /<octave-change>-1<\/octave-change>/, "bass sounds an octave lower");
+  assert.match(xml, /<midi-unpitched>36<\/midi-unpitched>/, "drum kit mapped");
+  const mid = midiFromRecord(rec, arr);
+  assert.equal(String.fromCharCode(...mid.slice(0, 4)), "MThd");
+  assert.equal((mid[10] << 8) | mid[11], arr.layers.length + 2, "tempo track + voice + one per instrument");
+  assert.ok(!Array.from(mid).some((b, i) => (b & 0xf0) === 0xc0 && mid[i + 1] === 52 && i > 14), "no choir patch as the lead (9.6)");
+});
