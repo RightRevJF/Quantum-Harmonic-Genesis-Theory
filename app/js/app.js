@@ -844,7 +844,7 @@ function songRecord(s) {
   out.push(`# ${c.title || "Untitled"}`);
   if (c.writer) out.push(`Words and music: ${c.writer}`);
   out.push("");
-  out.push(`Type: ${typeLabel(s.type)} · Tempo: ${c.bpm} BPM ${c.feel || ""} · Key: ${c.key || "not set"} · Voice: ${c.voice || "not set"} · Form: ${c.form || "not set"}`);
+  out.push(`Type: ${typeLabel(s.type)} · Tempo: ${c.bpm} BPM ${c.feel || ""} · Key: ${c.key || "not set"} · Voice: ${(() => { const row = s.melody ? s.melody.voice : Mel.VOICES[c.voice] ? c.voice : null; const ch = c.voiceChar || (Mel.VOICES[c.voice] ? "" : c.voice); return row ? `${VOICE_LABEL[row] || row}: ${NOTE(Mel.VOICES[row].floor)}–${NOTE(Mel.VOICES[row].ceil)}${ch ? ` (${ch})` : ""}` : ch || "not set"; })()} · Form: ${c.form || "not set"}`);
   out.push("");
   out.push("## Lyric");
   out.push("");
